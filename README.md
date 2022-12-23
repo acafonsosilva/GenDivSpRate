@@ -1,7 +1,9 @@
-# GenDivSpRate
+# Negative global-scale association between genetic diversity and speciation rates in mammals
 
-This is a test
+This is a little overview of the analyses performed for the manuscript submitted entitled "Negative global-scale association between genetic diversity and speciation rates in mammals". Currently not all inputs and outputs are in this repository because gitfront is being used to be able to share the repository from GitHub without making it publicly available but this tool has a limited size for a repository to be included. 
 
+
+## Description of the scripts used in the analyses
 
 1. Folder_per_family.R:
 * Extract GenBank sequence for a given family to get metadata per family using NCBI taxonomy database and prepare folders to parallelize SuperCrunch per family 
@@ -134,7 +136,9 @@ This is a test
 
 8. bmlm
 
-subBMLM.shrunBMLM_global_mutRate.RextractBMLM_globalAll.R
+subBMLM.sh
+runBMLM_global_mutRate.R
+extractBMLM_globalAll.R
 
 otherData
 
