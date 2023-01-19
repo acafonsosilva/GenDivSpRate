@@ -1,6 +1,6 @@
 # Negative global-scale association between genetic diversity and speciation rates in mammals
 
-This is a little overview of the analyses performed for the manuscript submitted entitled "Negative global-scale association between genetic diversity and speciation rates in mammals". Currently not all inputs and outputs are in this repository because gitfront is being used to be able to share the repository from GitHub without making it publicly available but this tool has a limited size for a repository to be included. 
+This is a little overview of the analyses performed for the manuscript submitted entitled "Negative global-scale association between genetic diversity and speciation rates in mammals". Currently not all inputs and outputs are in this repository because gitfront is being used to be able to share the repository from GitHub without making it publicly available but this tool has a limited size for a repository to be included. The alignments and respective sequence metadata, and the input trait data is included in the folder data.
 
 
 ## Description of the scripts used in the analyses
@@ -132,7 +132,7 @@ This is a little overview of the analyses performed for the manuscript submitted
 * output: global_gendivSpRate_PGLSresults.rds, clade_gendivSpRate_PGLSresults.rds, global_gendivSpRateTraits_PGLSresults.rds, global_gendivSpRateMutRate_PGLSresults.rds, global_gendivSpRatePerSite_PGLSresults.rds
 
 
-### still to finish fixing
+### still to finish describing
 
 8. bmlm
 
