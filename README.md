@@ -132,17 +132,6 @@ This is a little overview of the analyses performed for the manuscript submitted
 * output: global_gendivSpRate_PGLSresults.rds, clade_gendivSpRate_PGLSresults.rds, global_gendivSpRateTraits_PGLSresults.rds, global_gendivSpRateMutRate_PGLSresults.rds, global_gendivSpRatePerSite_PGLSresults.rds
 
 
-### still to finish describing
-
-8. bmlm
-
-subBMLM.sh
-runBMLM_global_mutRate.R
-extractBMLM_globalAll.R
-
-otherData
-
-Figures.Rmd
 
 
 
