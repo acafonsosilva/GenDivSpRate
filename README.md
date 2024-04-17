@@ -1,6 +1,6 @@
 # Negative global-scale association between genetic diversity and speciation rates in mammals
 
-This is a little overview of the analyses performed for the manuscript submitted entitled "Negative global-scale association between genetic diversity and speciation rates in mammals". Currently not all inputs and outputs are in this repository because gitfront is being used to be able to share the repository from GitHub without making it publicly available but this tool has a limited size for a repository to be included. The alignments and respective sequence metadata, and the input trait data is included in the folder data.
+This is a little overview of the analyses performed for the manuscript submitted entitled "Negative global-scale association between genetic diversity and speciation rates in mammals". The alignments and respective sequence metadata, and the input trait data is included in the folder data. 
 
 
 ## Description of the scripts used in the analyses
@@ -88,9 +88,8 @@ This is a little overview of the analyses performed for the manuscript submitted
 * input:  upham_tree<tree1:MCC>.Rdata (data was a bit too heavy so stayed in the cluster and just kept locally the output files)
 * output: MCCposterior100_pars.txt (hyperparameters), MCCposterior100_tipRate.txt (branch and tip species-specific rates, MCCposterior100_treeMAPS.rds (MAPS from all the analyses)
 
-* Can't find the code used to make the file Upham_FBD_clades_nodes.txt but it's mostly a summary of per clade sampling fraction and the node position for each clade for plotting in figure 1.
 
-6.mutationRate (to be improved)
+6.mutationRate 
 
 6.1 - prepareMutRate.R
 * Input: upham_4064sp_FR_MCCposterior100.rdata, baseml.ctl, MamPhy_5911sp_tipGenFamOrdCladeGenesSampPC.txt, FIN3_pruned1_zPrunedMisID_zNumOK_CYTB.fasta
@@ -104,35 +103,6 @@ This is a little overview of the analyses performed for the manuscript submitted
 6.3 - mutation rate - extractMutRate.R
 * input: upham_4064sp_FR_MCCposterior100.rdata,  clades/<mutclade>/<100trees+MCC>/<mutclade>_res.txt
 * output: mutationRate_cytb3rdcodonPAML.rds
-
-7. pgls 
-
-7.1 - subpgls_All.sh > runPGLS.R
-* 100 posterior trees + MCC tree
-* analyses:
-        * global analyses (estimated pi vs speciation rate, mean subsampled pi vs speciation rate, estimated theta vs speciation rate, mean subsampled theta vs speciation rate)
-        * per clade analyses (estimated pi vs speciation rate, mean subsampled pi vs speciation rate, estimated theta vs speciation rate, mean subsampled theta vs speciation rate)
-        * trait analyses: estimated pi vs speciation rate + traits (body size, range area, mean temperature across range area, litter size, generation length), estimated pi vs traits, speciation rate vs traits
-        * mutation rate analyses: mutation rate vs speciation rate, Ne (from mutation rate and estimate pi) vs speciation rate.       
-* input: GenDiv_subsample5Ind.txt, upham_4064sp_FR_MCCposterior100.rdata, MamPhy_5911sp_tipGenFamOrdCladeGenesSampPC.txt, MCCposterior100_tipRate.txt, otherData/traits/matchedTraits.txt, mutationRate_cytb3rdcodonPAML.rds
-* output stored in the cluster: global_gendivSpRate_results_<tree>.rds, clade_gendivSpRate_results_<tree>.rds,  global_gendivSpRateTraits_results_<tree>.rds, global_gendivSpRateMutRate_results_<tree>.rds
-
-7.2 - subpgls_globalPerSite.R
-* Without species that have no genetic diversity for each of the codon sites, just species which more than 10 individuals, and without species that are not in frame 
-* analyses: estimated pi vs speciation rate, pi from first codon sites vs speciation rate, pi from second codon sites vs speciation rate, pi from third codon sites vs speciation rate
-* input: GenDiv_subsample5Ind.txt, upham_4064sp_FR_MCCposterior100.rdata, MamPhy_5911sp_tipGenFamOrdCladeGenesSampPC.txt, MCCposterior100_tipRate.txt, speciesFrame.txt
-* output: global_gendivSpRatePerSite_results_<tree>.rds (stored in the cluster), extra/GendivSpRate10.rds
-
-
-* extra has several files created for preliminary analyses and to help plotting
-
-7.3 - extractPGLS.R
-
-* input stored in the cluster: global_gendivSpRate_results_<tree>.rds, clade_gendivSpRate_results_<tree>.rds,  global_gendivSpRateTraits_results_<tree>.rds, global_gendivSpRateMutRate_results_<tree>.rds, global_gendivSpRatePerSite_results_<tree>.rds
-* output: global_gendivSpRate_PGLSresults.rds, clade_gendivSpRate_PGLSresults.rds, global_gendivSpRateTraits_PGLSresults.rds, global_gendivSpRateMutRate_PGLSresults.rds, global_gendivSpRatePerSite_PGLSresults.rds
-
-
-
 
 
 

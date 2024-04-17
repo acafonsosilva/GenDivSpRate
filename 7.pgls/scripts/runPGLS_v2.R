@@ -1,0 +1,350 @@
+library(ape)
+library(tidyverse)
+library(nlme)
+select = dplyr::select
+
+args <- commandArgs()
+print(args)
+repi <- as.numeric(gsub('--file=', '', args[6]))
+print(repi)
+
+#### load data
+folder_path <- '/data/biodiv/asilva/rerunAnalyses/'
+
+## discard species without genetic diversity and species which either mean subsampled pi or theta are outside the range of 1000 subsamples to 5 individuals
+gen.divCIc_sc <- read.delim(paste0(folder_path, 'genetic_diversity/GenDiv_SynNonSyn_resampled4ind.txt')) %>%
+  filter(EstPiSyn > 0, outPiSyn %in% 'in', outThetaSyn %in% 'in') ### this way doesn't exclude species with 5 individuals
+
+##load phylogenies and speciation rates from 100 posterior trees + MCC tree
+load(paste0(folder_path,'speciation_rate/output/upham_4064sp_FR_MCCposterior100.rdata')) #loads TreeSet
+repiTree <- names(TreeSet)[repi]
+print(repiTree)
+t <- TreeSet[[repiTree]]
+
+clades <- read.delim(paste0(folder_path, 
+                            'speciation_rate/input/MamPhy_5911sp_tipGenFamOrdCladeGenesSampPC.txt')) %>%
+  drop_na(PC) %>%
+  mutate(species = word(tiplabel, 1,2, sep = "_"),
+         clades = sub("^PC\\d+_",  "", PC)) %>%
+  dplyr::select(species, clades) 
+
+spRate <- read.delim(paste0(folder_path,'speciation_rate/output/MCCposterior100_tipRate.txt')) %>% 
+  rename(set = treeN ) %>% 
+  filter(set %in% names(TreeSet)[repi]) %>%
+  left_join(., clades, by = 'species') 
+
+gendivSpRate <- dplyr::select(gen.divCIc_sc, species, EstPiSyn, EstThetaSyn) %>%
+  left_join(., spRate, by = 'species') 
+
+gendivSpRateOther <- dplyr::select(gen.divCIc_sc, species, EstPiTotal, EstPiNonSyn, 
+                              EstThetaTotal, EstThetaNonSyn) %>%
+  filter(EstPiTotal > 0, EstPiNonSyn > 0, EstThetaTotal > 0, EstThetaNonSyn > 0) %>%
+  left_join(., spRate, by = 'species') 
+
+gendivSpRateSub <- dplyr::select(gen.divCIc_sc, species, subPiSyn_mean, subThetaSyn_mean) %>%
+  left_join(., spRate, by = 'species')
+
+#### global ####
+
+## Prepare Estimated dataset independently of subsampled dataset with species with more than 5 individuals and resampled 1000x to 5
+DataSubset <- gendivSpRate %>%
+  filter(set %in% repiTree) %>%
+  droplevels()
+dim(DataSubset)
+
+TreeSubset <- drop.tip(t, as.character(t$tip.label[which(!t$tip.label %in% DataSubset$species)]))
+TreeSubset
+
+DataSubsetOther <- gendivSpRateOther %>%
+  filter(set %in% repiTree) %>%
+  droplevels()
+
+TreeSubsetOther <- drop.tip(t, as.character(t$tip.label[which(!t$tip.label %in% DataSubsetOther$species)]))
+TreeSubsetOther
+
+DataSubsetSub <- gendivSpRateSub %>%
+  filter(set %in% repiTree) %>%
+  droplevels()
+dim(DataSubsetSub)
+
+TreeSubsetSub <- drop.tip(t, as.character(t$tip.label[which(!t$tip.label %in% DataSubsetSub$species)]))
+TreeSubset
+
+
+## Run global
+    modpglsEstPiTotal <- NULL
+    modpglsEstPiTotal <- gls(log(EstPiTotal) ~ log(tipRate), 
+                             data = DataSubsetOther,
+                             correlation = corPagel(1, phy = TreeSubsetOther, 
+                                                    form =~species), 
+                             method = "ML")
+
+    modpglsEstPiNonSyn <- NULL
+    modpglsEstPiNonSyn <- gls(log(EstPiNonSyn) ~ log(tipRate), 
+                               data = DataSubsetOther,
+                               correlation = corPagel(1, phy = TreeSubsetOther, 
+                                                      form =~species), 
+                               method = "ML")
+
+    modpglsEstThetaTotal <- NULL
+    modpglsEstThetaTotal <- gls(log(EstThetaTotal) ~ log(tipRate), 
+                                 data = DataSubsetOther,
+                                 correlation = corPagel(1, phy = TreeSubsetOther, 
+                                                        form =~species), 
+                                 method = "ML")
+
+    modpglsEstThetaNonSyn <- NULL
+    modpglsEstThetaNonSyn <- gls(log(EstThetaNonSyn) ~ log(tipRate), 
+                                  data = DataSubsetOther,
+                                  correlation = corPagel(1, phy = TreeSubsetOther, 
+                                                         form =~species), 
+                                  method = "ML")
+
+    #estimated pi vs speciation rate at the tips
+    modpglsEstPiSyn <- NULL
+    modpglsEstPiSyn <- gls(log(EstPiSyn) ~ log(tipRate), 
+                            data = DataSubset,
+                            correlation = corPagel(1, phy = TreeSubset, 
+                                                   form =~species), 
+                            method = "ML")
+
+    #mean subsampled pi vs speciation rate at the tips
+    modpglssubPiSyn_mean <- NULL
+    modpglssubPiSyn_mean <- gls(log(subPiSyn_mean) ~ log(tipRate), 
+                                 data = DataSubsetSub,
+                                 correlation = corPagel(1, phy = TreeSubsetSub, 
+                                                        form =~species), 
+                                 method = "ML")
+
+    #estimated theta vs speciation rate at the tips
+    modpglsEstThetaSyn <- NULL
+    modpglsEstThetaSyn <- gls(log(EstThetaSyn) ~ log(tipRate), 
+                               data = DataSubset,
+                               correlation = corPagel(1, phy = TreeSubset, 
+                                                      form =~species), 
+                               method = "ML")
+
+    #mean subsampled theta vs speciation rate at the tips
+    modpglssubThetaSyn_mean <- NULL
+    modpglssubThetaSyn_mean <- gls(log(subThetaSyn_mean) ~ log(tipRate), 
+                                    data = DataSubsetSub,
+                                    correlation = corPagel(1, phy = TreeSubsetSub, 
+                                                           form =~species), 
+                                    method = "ML")
+
+## Run clade
+##Prepare per clade analyses sets without traits - parallelise per clade
+
+freqClade <- table(gendivSpRate$clades)
+
+pglsClade <- list()
+for (clade in levels(as.factor(gendivSpRate$clades))){
+  if(clade %in% names(freqClade[freqClade > 19])){ ##only for clades with at least 20 species
+
+    # dtset  <- gendivSpRate %>%
+    #   filter(set %in% repiTree,  clades %in% clade) %>%
+    #   droplevels()
+    # TreeSubset <- drop.tip(t, as.character(t$tip.label[which(!t$tip.label %in% dtset$species)]))
+    # 
+    # dtsetSub <- gendivSpRateSub %>%
+    #   filter(set %in% repiTree,  clades %in% clade) %>%
+    #   droplevels()
+    # 
+    # TreeSubsetSub <- drop.tip(t, as.character(t$tip.label[which(!t$tip.label %in% dtsetSub$species)]))
+    # 
+    # #estimated pi vs speciation rate at the tips
+    # modpglsEstPiSync <- NULL
+    # modpglsEstPiSync <- gls(log(EstPiSyn) ~ log(tipRate),
+    #                         data = dtset,
+    #                         correlation = corPagel(1, phy = TreeSubset,
+    #                                                form =~species),
+    #                         method = "ML")
+    # 
+    # # #mean subsampled pi vs speciation rate at the tips
+    # modpglssubPiSyn_meanc <- NULL
+    # modpglssubPiSyn_meanc <- gls(log(subPiSyn_mean) ~ log(tipRate),
+    #                              data = dtsetSub,
+    #                              correlation = corPagel(1, phy = TreeSubsetSub,
+    #                                                     form =~species),
+    #                              method = "ML")
+    # 
+    # #estimated theta vs speciation rate at the tips
+    # modpglsEstThetaSync <- NULL
+    # modpglsEstThetaSyn <- gls(log(EstThetaSyn) ~ log(tipRate),
+    #                           data = dtset,
+    #                           correlation = corPagel(1, phy = TreeSubset,
+    #                                                  form =~species),
+    #                           method = "ML")
+    # 
+    # # #mean subsampled theta vs speciation rate at the tips
+    # modpglssubThetaSyn_meanc <- NULL
+    # modpglssubThetaSyn_meanc <- gls(log(subThetaSyn_mean) ~ log(tipRate),
+    #                                 data = dtsetSub,
+    #                                 correlation = corPagel(1, phy = TreeSubsetSub,
+    #                                                        form =~species),
+    #                                 method = "ML")
+    # 
+    # pglsClade[[clade]] <- list(EstPiSyn = modpglsEstPiSync,
+    #                            SubPiSyn = modpglssubPiSyn_meanc,
+    #                            EstThetaSyn = modpglsEstThetaSync,
+    #                            SubThetaSyn = modpglssubThetaSyn_meanc)
+
+
+    DataSubset <- gendivSpRate %>% 
+      filter(set %in% repiTree,  clades %in% clade) %>% 
+      droplevels()   
+    
+    TreeSubset <- drop.tip(t, as.character(t$tip.label[which(!t$tip.label %in% DataSubset$species)]))
+    
+    datacompClades <- comparative.data(data = DataSubset, 
+                                                phy = TreeSubset, 
+                                                names.col = "species", 
+                                                vcv = TRUE, 
+                                                na.omit = TRUE, warn.dropped = TRUE)
+    
+    DataSubsetSub <- gendivSpRateSub %>% 
+      filter(set %in% repiTree,  clades %in% clade) %>% 
+      droplevels() 
+    
+    TreeSubsetSub <- drop.tip(t, as.character(t$tip.label[which(!t$tip.label %in% DataSubsetSub$species)]))
+    
+    datacompCladesSub <- comparative.data(data = DataSubsetSub, 
+                                                   phy = TreeSubsetSub, 
+                                                   names.col = "species", 
+                                                   vcv = TRUE,
+                                                   na.omit = TRUE, warn.dropped = TRUE)
+    
+    
+    modpglsEstPiSyn <- NULL
+    modpglsEstPiSyn <- pgls(log(EstPiSyn) ~ log(tipRate), data = datacompClades, lambda = 'ML')
+    
+    # #mean subsampled pi vs speciation rate at the tips
+    modpglssubPiSyn <- NULL
+    modpglssubPiSyn <- pgls(log(subPiSyn_mean) ~ log(tipRate), data = datacompCladesSub, lambda = 'ML')
+    
+    #estimated theta vs speciation rate at the tips
+    modpglsEstThetaSyn <- NULL
+    modpglsEstThetaSyn <- pgls(log(EstThetaSyn) ~ log(tipRate), data = datacompClades, lambda = 'ML')
+    
+    # #mean subsampled theta vs speciation rate at the tips
+    modpglssubthetaSyn <- NULL
+    modpglssubthetaSyn <- pgls(log(subThetaSyn_mean) ~ log(tipRate), data = datacompCladesSub, lambda = 'ML')
+    
+    pgls[[clade]] <- list(EstPiSyn = modpglsEstPiSyn, SubPiSyn = modpglssubPiSyn,
+                          EstThetaSyn = modpglsEstThetaSyn, SubThetaSyn = modpglssubthetaSyn)
+  }
+}
+
+
+saveRDS(pglsClade, paste0(folder_path,'/pgls/output/clade_gendivSpRate_results_',repiTree,'.rds'))
+
+#### Traits ####
+
+traitData <- read.delim(paste0(folder_path,'traits/matchedTraits_v2.txt'), stringsAsFactors = FALSE) %>%
+  mutate(mean_temp = mean_temp + abs(min(mean_temp, na.rm = T)) + 1,
+         latitude_mean = abs(latitude_mean)) 
+
+gendivSpRateTrait <- dplyr::select(gen.divCIc_sc, species, EstPiSyn) %>%
+  left_join(., spRate, by = 'species') %>%
+  left_join(., traitData, by = 'species')
+
+#### Prepare trait analyses sets only for global analysis - parallelise per tree
+
+DataSubset <- gendivSpRateTrait %>%
+  select(species, set, EstPiSyn, tipRate, BodyMassKg_notInputed, geoArea_km2, mean_temp,
+         litter_or_clutch_size_n, GenerationLength_d, latitude_mean) %>%
+  filter(set %in% repiTree) %>%
+  drop_na()
+
+dim(DataSubset)
+
+TreeSubset <- drop.tip(t, as.character(t$tip.label[which(!t$tip.label %in% DataSubset$species)]))
+TreeSubset
+
+modpiSpRateTraits <- NULL
+modpiSpRateTraits <- gls(log(EstPiSyn) ~ log(tipRate) + log(BodyMassKg_notInputed) +
+                           log(geoArea_km2) + log(mean_temp) + log(latitude_mean) +
+                           log(litter_or_clutch_size_n) + log(GenerationLength_d), 
+                         data = DataSubset,
+                         correlation = corPagel(1, phy = TreeSubset, 
+                                                form =~species), 
+                         method = "ML")
+
+modpiTraits <- NULL
+modpiTraits <- gls(log(EstPiSyn) ~ log(BodyMassKg_notInputed) + 
+                     log(geoArea_km2) + log(mean_temp) + log(latitude_mean) +
+                     log(litter_or_clutch_size_n) +
+                     log(GenerationLength_d), 
+                   data = DataSubset ,
+                   correlation = corPagel(1, phy = TreeSubset, 
+                                          form =~species), 
+                   method = "ML")
+
+modSpRateTraits <- NULL
+modSpRateTraits <- gls(log(tipRate) ~ log(BodyMassKg_notInputed) +
+                         log(geoArea_km2) + log(mean_temp) + log(latitude_mean) +
+                         log(litter_or_clutch_size_n) + log(GenerationLength_d), 
+                       data = DataSubset ,
+                       correlation = corPagel(1, phy = TreeSubset, 
+                                              form =~species), 
+                       method = "ML")
+
+
+#### Mutation rate ####
+MutRateAll <- readRDS(paste0(folder_path, 'mutation_rate/output/mutationRate_cytb3rdcodonPAML.rds'))
+
+## Join data
+gendivSpRateMutRate <- select(gendivSpRateTrait, species, set, EstPiSyn, tipRate, GenerationLength_d)   %>%
+  drop_na() %>%
+  left_join(., MutRateAll, by = c('set','species')) %>%
+  select(-mutrate) %>% ## mutation rate per Mya and not per year
+  mutate(timeyear = time * 1000000,
+         GenerationLength_y = GenerationLength_d/365,
+         mutRate = (expNsub * GenerationLength_y) / timeyear,
+         Ne = EstPiSyn / mutRate,
+         mutRate_y = expNsub/timeyear) %>%
+  arrange(set)
+
+## Prepare trait analyses sets only for global analysis - parallelise per tree
+DataSubset <- gendivSpRateMutRate %>%
+  select(species, set, mutRate, Ne, tipRate) %>%
+  filter(set %in% repiTree) %>%
+  drop_na()
+
+TreeSubset <- drop.tip(t, as.character(t$tip.label[which(!t$tip.label %in% DataSubset$species)]))
+TreeSubset
+
+## Run mutation rate analyses
+
+#mutation rate vs speciation rate
+modMutRateSpRate <- NULL
+modMutRateSpRate <- gls(log(mutRate) ~ log(tipRate), 
+                        data = DataSubset ,
+                        correlation = corPagel(1, phy = TreeSubset, 
+                                               form =~species), 
+                        method = "ML")
+
+#Ne (pi/u) vs speciation rate
+modNeSpRate <- NULL
+modNeSpRate <- gls(log(Ne) ~ log(tipRate), 
+                   data = DataSubset ,
+                   correlation = corPagel(1, phy = TreeSubset, 
+                                          form =~species), 
+                   method = "ML")
+
+####
+pgls <- list(EstPiTotal = modpglsEstPiTotal,
+             EstPiNonSyn = modpglsEstPiNonSyn,
+             EstThetaTotal = modpglsEstThetaTotal,
+             EstThetaNonSyn = modpglsEstThetaNonSyn,
+             EstPiSyn = modpglsEstPiSyn,
+             SubPiSyn = modpglssubPiSyn_mean,
+             EstThetaSyn = modpglsEstThetaSyn,
+             SubThetaSyn = modpglssubThetaSyn_mean,
+             piSpRateTraits = modpiSpRateTraits,
+             piTraits = modpiTraits,
+             SpRateTraits = modSpRateTraits,
+             MutRateSpRate = modMutRateSpRate,
+             NeSpRate = modNeSpRate)
+
+saveRDS(pgls, paste0(folder_path,'/pgls/output/global_gendivSpRateALL_results_',repiTree,'.rds'))
