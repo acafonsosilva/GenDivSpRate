@@ -54,7 +54,7 @@ for (clade in levels(as.factor(clades$clades))){
 }
 
 #### Prepare data for each posterior tree
-### since some species there is no cytb information from Nathan's alignment then each tree needs to have the same labels as the DNA alignment
+### since for some species there is no cytb information from Nathan's alignment then each tree needs to have the same labels as the DNA alignment
 mutClades <- list.dirs(wd, recursive = FALSE, full.names = FALSE)
 for ( i in mutClades){
   for (j in names(TreeSet)){

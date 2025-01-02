@@ -136,70 +136,70 @@ modpglssubThetaSyn_mean <- gls(log(subThetaSyn_mean) ~ log(tipRate),
 ## Run clade
 ##Prepare per clade analyses sets without traits - parallelise per clade
 
-# freqClade <- table(gendivSpRate[gendivSpRate$set %in% 'treeMCC','clades'])
-# 
-# pglsClade <- list()
-# for (clade in levels(as.factor(gendivSpRate$clades))){
-#   if(clade %in% names(freqClade[freqClade > 19])){ ##only for clades with at least 20 species
-#     
-#     dtset  <- gendivSpRate %>%
-#       filter(set %in% repiTree,  clades %in% clade) %>%
-#       droplevels()
-#     TreeSubset <- drop.tip(t, as.character(t$tip.label[which(!t$tip.label %in% dtset$species)]))
-#     
-#     dtsetSub <- gendivSpRateSub %>%
-#       filter(set %in% repiTree,  clades %in% clade) %>%
-#       droplevels()
-#     
-#     TreeSubsetSub <- drop.tip(t, as.character(t$tip.label[which(!t$tip.label %in% dtsetSub$species)]))
-#     
-#     #estimated pi vs speciation rate at the tips
-#     modpglsEstPiSync <- NULL
-#     modpglsEstPiSync <- gls(log(EstPiSyn) ~ log(tipRate), 
-#                             data = dtset,
-#                             correlation = corPagel(1, phy = TreeSubset, 
-#                                                    form =~species), 
-#                             method = "ML")
-#     
-#     # #mean subsampled pi vs speciation rate at the tips
-#     modpglssubPiSyn_meanc <- NULL
-#     modpglssubPiSyn_meanc <- gls(log(subPiSyn_mean) ~ log(tipRate), 
-#                                  data = dtsetSub,
-#                                  correlation = corPagel(1, phy = TreeSubsetSub, 
-#                                                         form =~species), 
-#                                  method = "ML")
-#     
-#     #estimated theta vs speciation rate at the tips
-#     modpglsEstThetaSync <- NULL
-#     modpglsEstThetaSyn <- gls(log(EstThetaSyn) ~ log(tipRate), 
-#                               data = dtset,
-#                               correlation = corPagel(1, phy = TreeSubset, 
-#                                                      form =~species), 
-#                               method = "ML")
-#     
-#     # #mean subsampled theta vs speciation rate at the tips
-#     modpglssubThetaSyn_meanc <- NULL
-#     modpglssubThetaSyn_meanc <- gls(log(subThetaSyn_mean) ~ log(tipRate), 
-#                                     data = dtsetSub,
-#                                     correlation = corPagel(1, phy = TreeSubsetSub, 
-#                                                            form =~species), 
-#                                     method = "ML")
-#     
-#     pglsClade[[clade]] <- list(EstPiSyn = modpglsEstPiSync,
-#                                SubPiSyn = modpglssubPiSyn_meanc,
-#                                EstThetaSyn = modpglsEstThetaSync,
-#                                SubThetaSyn = modpglssubThetaSyn_meanc)
-#     
-#     
-#   }
-# }
-# 
-# 
-# saveRDS(pglsClade, paste0(folder_path,'/pgls/output/clade_gendivSpRate_results_',repiTree,'.rds'))
+freqClade <- table(gendivSpRate[gendivSpRate$set %in% 'treeMCC','clades'])
+
+pglsClade <- list()
+for (clade in levels(as.factor(gendivSpRate$clades))){
+  if(clade %in% names(freqClade[freqClade > 19])){ ##only for clades with at least 20 species
+    
+    dtset  <- gendivSpRate %>%
+      filter(set %in% repiTree,  clades %in% clade) %>%
+      droplevels()
+    TreeSubset <- drop.tip(t, as.character(t$tip.label[which(!t$tip.label %in% dtset$species)]))
+    
+    dtsetSub <- gendivSpRateSub %>%
+      filter(set %in% repiTree,  clades %in% clade) %>%
+      droplevels()
+    
+    TreeSubsetSub <- drop.tip(t, as.character(t$tip.label[which(!t$tip.label %in% dtsetSub$species)]))
+    
+    #estimated pi vs speciation rate at the tips
+    modpglsEstPiSync <- NULL
+    modpglsEstPiSync <- gls(log(EstPiSyn) ~ log(tipRate), 
+                            data = dtset,
+                            correlation = corPagel(1, phy = TreeSubset, 
+                                                   form =~species), 
+                            method = "ML")
+    
+    # #mean subsampled pi vs speciation rate at the tips
+    modpglssubPiSyn_meanc <- NULL
+    modpglssubPiSyn_meanc <- gls(log(subPiSyn_mean) ~ log(tipRate), 
+                                 data = dtsetSub,
+                                 correlation = corPagel(1, phy = TreeSubsetSub, 
+                                                        form =~species), 
+                                 method = "ML")
+    
+    #estimated theta vs speciation rate at the tips
+    modpglsEstThetaSync <- NULL
+    modpglsEstThetaSyn <- gls(log(EstThetaSyn) ~ log(tipRate), 
+                              data = dtset,
+                              correlation = corPagel(1, phy = TreeSubset, 
+                                                     form =~species), 
+                              method = "ML")
+    
+    # #mean subsampled theta vs speciation rate at the tips
+    modpglssubThetaSyn_meanc <- NULL
+    modpglssubThetaSyn_meanc <- gls(log(subThetaSyn_mean) ~ log(tipRate), 
+                                    data = dtsetSub,
+                                    correlation = corPagel(1, phy = TreeSubsetSub, 
+                                                           form =~species), 
+                                    method = "ML")
+    
+    pglsClade[[clade]] <- list(EstPiSyn = modpglsEstPiSync,
+                               SubPiSyn = modpglssubPiSyn_meanc,
+                               EstThetaSyn = modpglsEstThetaSync,
+                               SubThetaSyn = modpglssubThetaSyn_meanc)
+    
+    
+  }
+}
+
+
+saveRDS(pglsClade, paste0(folder_path,'/pgls/output/clade_gendivSpRate_results_',repiTree,'.rds'))
 
 #### Traits ####
 
-traitData <- read.delim(paste0(folder_path,'traits/matchedTraits_v2.txt'), stringsAsFactors = FALSE) %>%
+traitData <- read.delim(paste0(folder_path,'traits/matchedTraits_v3.txt'), stringsAsFactors = FALSE) %>%
   mutate(mean_temp = mean_temp + abs(min(mean_temp, na.rm = T)) + 1,
          latitude_mean = abs(latitude_mean)) 
 
@@ -260,9 +260,7 @@ gendivSpRateMutRate <- select(gendivSpRateTrait, species, set, EstPiSyn, tipRate
          mutRate = (expNsub * GenerationLength_y) / timeyear,
          Ne = EstPiSyn / mutRate,
          mutRate_y = expNsub/timeyear,
-         Ne_y = EstPiSyn / mutRate_y,
-         mutRate2 = sqrt(mutRate * EstPiSyn)/geoArea_km2,
-         Ne2 = EstPiSyn/sqrt(mutRate*EstPiSyn/geoArea_km2)) %>%
+         Ne_y = EstPiSyn / mutRate_y) %>%
   arrange(set)
 
 ## Prepare trait analyses sets only for global analysis - parallelise per tree
@@ -274,14 +272,6 @@ DataSubset1 <- gendivSpRateMutRate %>%
 
 TreeSubset1 <- drop.tip(t, as.character(t$tip.label[which(!t$tip.label %in% DataSubset1$species)]))
 TreeSubset1
-
-DataSubset2 <- gendivSpRateMutRate %>%
-  select(species, set, mutRate2, Ne2, tipRate) %>%
-  filter(set %in% repiTree) %>%
-  drop_na()
-
-TreeSubset2 <- drop.tip(t, as.character(t$tip.label[which(!t$tip.label %in% DataSubset2$species)]))
-TreeSubset2
 
 ## Run mutation rate analyses
 
@@ -298,24 +288,6 @@ modNeSpRate <- NULL
 modNeSpRate <- gls(log(Ne) ~ log(tipRate), 
                    data = DataSubset1,
                    correlation = corPagel(1, phy = TreeSubset1, 
-                                          form =~species), 
-                   method = "REML")
-
-
-
-#mutation rate vs speciation rate
-modMutRateSpRate2 <- NULL
-modMutRateSpRate2 <- gls(log(mutRate2) ~ log(tipRate), 
-                        data = DataSubset2 ,
-                        correlation = corPagel(1, phy = TreeSubset2, 
-                                               form =~species), 
-                        method = "REML")
-
-#Ne (pi/u) vs speciation rate
-modNeSpRate2 <- NULL
-modNeSpRate2 <- gls(log(Ne2) ~ log(tipRate), 
-                   data = DataSubset2 ,
-                   correlation = corPagel(1, phy = TreeSubset2, 
                                           form =~species), 
                    method = "REML")
 
@@ -349,10 +321,8 @@ pgls <- list(EstPiTotal = modpglsEstPiTotal,
              SpRateTraits = modSpRateTraits,
              MutRateSpRate = modMutRateSpRate,
              NeSpRate = modNeSpRate,
-             MutRateSpRat2e = modMutRateSpRate2,
-             NeSpRate2 = modNeSpRate2,
              MutyRateSpRate = modMutyRateSpRate,
-             NeySpRate = modNeySpRate,)
+             NeySpRate = modNeySpRate)
 
 saveRDS(pgls, paste0(folder_path,'/pgls/output/global_gendivSpRateALL_results_',repiTree,'.rds'))
 

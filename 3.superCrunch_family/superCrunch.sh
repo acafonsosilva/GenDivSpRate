@@ -88,3 +88,5 @@ for file in *; do mv "$family_folder/Trimmed-fasta-Files/$file" "$family_folder/
  
 cp -r $family_folder/Trimmed-fasta-Files/* $supercrunch_folder_path/Output_alignments/
 
+###### Further manual checking step with script fix_notInFrame_getAccession.R
+

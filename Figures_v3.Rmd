@@ -1,0 +1,3184 @@
+---
+title: "Negative global-scale association between genetic diversity and speciation rates in mammals - results_v2"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    highlight: tango
+    code_folding: hide
+    depth: 4
+    number_sections: no
+    theme: sandstone
+    toc: yes
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+mainfont: "Arial"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+folder_path <- '/Users/acas/Dropbox/Post-docs/Morlon_Lab/manuscript_projects_info/mammals_genDiv_SpRate/manuscript_scripts_data/thirdSubmission/'
+
+fig_path <- paste0(folder_path,'figures_tables/')
+
+library(knitr)
+library(flextable)
+library(officer)
+library(tidyverse)
+library(caper)
+library(ape)
+library(phytools)
+library(tidybayes)
+library(Rmisc)
+library(hues)
+library(RColorBrewer) 
+library(fields)
+library(plotrix)
+library(ggpubr)
+library(gridExtra)
+library(scales)
+library(ggtree)
+library(gt)
+library(cowplot)
+library(patchwork)
+library(nlme)
+library(ggh4x)
+library(geosphere)
+library(showtext)
+library(scico)
+source(paste0(folder_path,'5.speciation_rate/scripts/match_edges.R')) #to plot data in phylogeny
+
+filter = dplyr::filter
+count = dplyr::count
+mutate = dplyr::mutate
+select = dplyr::select
+rename = dplyr::rename
+recode = dplyr::recode
+
+opts_chunk$set(tidy=TRUE,
+               echo = TRUE, 
+               cache = FALSE,
+               message=FALSE,
+               warning=FALSE)
+opts_knit$set(progress = TRUE, verbose = TRUE)
+
+font_add("Arial", regular = "arial.ttf")
+showtext_auto()
+
+fon <- 'Arial'
+theme_set(theme(text = element_text(family=fon)))
+```
+
+
+```{r}
+gen.div <- read.delim(paste0(folder_path, '4.genetic_diversity/outputs/GenDiv_SynNonSyn_resampled4ind.txt')) %>%
+  filter(EstPiSyn > 0, outPiSyn %in% 'in', outThetaSyn %in% 'in') 
+
+##load phylogenies and speciation rates from 100 posterior trees + MCC tree
+TreeRatesSet <- readRDS(paste0(folder_path,'5.speciation_rate/outputs/MCCposterior100_treeMAPS.rds'))
+
+treeMCC <- TreeRatesSet[["treeMCC"]][["tree"]]
+ratesMCC <- TreeRatesSet[["treeMCC"]][["rates"]][!is.na(names(TreeRatesSet[["treeMCC"]][["rates"]]))][-c(1:4)] 
+
+parClaDS <- tibble(rates = purrr::map(TreeRatesSet,'rates')) %>% 
+  hoist(rates, 
+        sigma = "sigma", 
+        alpha = "alpha", 
+        epsilon = "epsilon", 
+        lambda_0 = "lambda_0") %>% 
+  mutate(set = names(TreeRatesSet)) %>%
+  select(-rates)
+
+tipLengths <- cbind.data.frame(edge = treeMCC$edge, 
+                               time = treeMCC$edge.length) %>%
+  filter(edge.2 <= Ntip(treeMCC)) %>%
+  mutate(species = treeMCC$tip.label,
+         nodes_sister = ifelse(edge.1 %in% edge.1[duplicated(edge.1)], "sister","nonSister"))
+
+clades <- read.delim(paste0(folder_path,'5.speciation_rate/inputs/MamPhy_5911sp_tipGenFamOrdCladeGenesSampPC.txt')) %>%
+  drop_na(PC) %>%
+  mutate(species = word(tiplabel, 1,2, sep = "_"),
+         clades = sub("^PC\\d+_",  "", PC)) %>%
+  select(species, clades, ord, fam) %>%
+  filter(species %in% treeMCC$tip.labels)
+
+changeClades <- select(clades, clades) %>%
+  distinct() %>%
+  arrange(clades) %>%
+  filter(clades %in% c("Cetartiodactyla", "EmballonuridRelated",
+                       "GuineaPigRelated","Marsupials", "PhyllostomidRelated",
+                       "SquirrelRelated","VespertilionidRelated")) %>%
+  mutate(newNames = c("Artiodactyla", "Emballonuroidea", 
+                      "Guinea Pig-related","Marsupialia", "Noctilionoidea",
+                      "Squirrel-related", "Vespertilionoidea")) 
+
+Nodes <- read.delim(paste0(folder_path,'5.speciation_rate/inputs/Upham_FBD_clades_nodes.txt')) 
+
+### to include the clades that had fewer species as an arc in figure 1
+for(clade in unique(clades$clades)[!unique(clades$clades) %in% Nodes$clades]){
+  a <- as.character(clades[clades$clades %in% clade,'species'])
+  cladeNode <- ape::getMRCA(treeMCC, a)
+  if(!is.null(cladeNode)){
+    Nodes <- bind_rows(Nodes, data.frame(clades = clade, node = cladeNode))
+  }
+}
+
+spRate <- read.delim(paste0(folder_path,'5.speciation_rate/outputs/MCCposterior100_tipRate.txt')) %>% 
+  rename(set = treeN ) %>% 
+  left_join(., clades, by = 'species') 
+
+gendivSpRate <- spRate %>% 
+  left_join(., select(gen.div, species, EstPiSyn, subPiSyn_mean, EstThetaSyn, subThetaSyn_mean), by = 'species')
+
+traitData <- read.delim(paste0(folder_path,'otherData/traits/matchedTraits_v3.txt'), stringsAsFactors = FALSE) %>%
+  select(-Family) %>%
+  mutate(mean_temp = mean_temp + abs(min(mean_temp, na.rm = T)) + 1,
+         latitude_mean = abs(latitude_mean)) 
+
+gendivSpRateTrait <- gendivSpRate %>%
+  left_join(., traitData, by = 'species') 
+
+MutRateAll <- readRDS(paste0(folder_path, '6.mutationRate/outputs/mutationRate_cytb3rdcodonPAML.rds')) 
+
+gendivSpRateMutRate <- gendivSpRateTrait  %>%
+  left_join(., MutRateAll, by = c('set','species')) %>%
+  select(-mutrate) %>% 
+  mutate(timeyear = time * 1000000,
+         GenerationLength_y = GenerationLength_d/365,
+         mutRate = (expNsub * GenerationLength_y) / timeyear,
+         Ne = EstPiSyn / mutRate,
+         mutRate_y = expNsub/timeyear,
+         Ne_y = EstPiSyn / mutRate_y) %>%
+  arrange(set)
+
+### Load PGLS results
+extract_strings_in_parentheses <- function(text) {
+  matches <- str_match_all(text, "\\((.*?)\\)")[[1]]
+  if (is.null(matches))
+    return(NA_character_)
+  
+  extracted_strings <- matches[, 2]
+  return(paste(extracted_strings, collapse = " + "))
+}
+
+PGLSglobalAll <- readRDS(paste0(folder_path,'7.pgls/outputs/gendivSpRate_PGLSresultsAll_REML.rds'))  %>% 
+  rename(Estimate = 'Value',SE = 'Std.Error', pvalue = 'p.value') %>% 
+  mutate(modelR = sapply(word(modelF, sep = " ~ ",1,1), extract_strings_in_parentheses),
+         modelP = sapply(word(modelF, sep = " ~ ",2,2), extract_strings_in_parentheses),
+         term = sapply(term, extract_strings_in_parentheses),
+         analysisType = case_when(analysis %in% c("piSpRateTraits", "piTraits","SpRateTraits") ~ "global_traits",
+                                  analysis %in% c("MutyRateSpRate","NeySpRate") ~ "global_mutRate",
+                                  analysis %in% c("EstPiSyn","SubPiSyn","EstThetaSyn","SubThetaSyn") ~ "global",
+                                  TRUE ~ "other")) 
+
+PGLSclade <- readRDS(paste0(folder_path,'7.pgls/outputs/clade_gendivSpRate_PGLSresults.rds')) %>% 
+  mutate(term = case_when(term %in% '(Intercept)' ~ 'Intercept',
+                          term %in% 'log(tipRate)' ~ 'tipRate')) %>% 
+  rename(pgls_lambda = 'lambda',
+         pvalue = 'Pr...t..') %>% 
+  select(clade, set, analysis, df, pgls_lambda, term, Estimate, pvalue)
+
+
+### Load BMLM results
+BMLMglobal <- readRDS(paste0(folder_path,'8.bmlm/outputs/global_allPosterior.rds')) 
+BMLMglobal_traits <- readRDS(paste0(folder_path,'8.bmlm/outputs/global_traits_allPosterior.rds'))
+BMLMglobal_mutRate <- readRDS(paste0(folder_path,'8.bmlm/outputs/global_mutRate_allPosterior_year.rds'))
+
+colSet <- data.frame(clades = unique(PGLSclade$clade),
+                    col = iwanthue(length(unique(PGLSclade$clade))))
+
+# Then create cladesSum as before
+cladesSum <- data.frame(table(clades$clades), 
+                       stringsAsFactors = F) %>%
+  rename(clades = Var1) %>%
+  left_join(colSet)  %>%
+  mutate(clades2 = ifelse(clades %in% changeClades$clades,
+                         changeClades$newNames[match(clades, changeClades$clades)],
+                         clades))
+
+```
+
+A total of `r nrow(gen.div)` species with synonymous genetic diversity data were used for most analyses. This corresponds to around `r round(nrow(gen.div)/sum(Nodes$Nsp_complete, na.rm = TRUE)*100,0)`% of sampled mammals species, given the species identified in Upham et. al 2019.
+
+# Figure 1
+
+```{r, fig.width = 7.087, fig.height = 5.45, cache = FALSE}
+#### prepare the data ####
+tipRatesMCC <- spRate %>%
+  filter(set %in% "treeMCC") %>%
+  pull(tipRate)
+
+sub_tree = treeMCC
+sub_rates = ratesMCC
+rep = map_rates_tipNroot(sub_tree, sub_rates = sub_rates, treeMCC, 
+                         rates = rep(NaN, nrow(treeMCC$edge)))
+new_rates = rep$rates
+clades_root = as.numeric(c(Nodes[Nodes$clades %in%  unique(PGLSclade$clade),'node']))
+clades_tips = list()
+clades_edges = list()
+
+for (i in unique(Nodes$clades)) {
+  clades_tips[[i]] = getDescendants(sub_tree, Nodes[Nodes$clades %in% i, 'node'])
+}
+
+names(clades_tips)[names(clades_tips) %in% changeClades$clades] <- na.omit(changeClades[match(names(clades_tips), changeClades$clades), 2])
+
+pglsSet <- unique(PGLSclade$clade)
+pglsSet[pglsSet %in% changeClades$clades] <- na.omit(changeClades[match(pglsSet, changeClades$clades), 2])
+
+
+#### a few options ####
+save_pdf = F
+
+v1_name = "EstPiSyn"
+col1_nbins = 100
+col1_offset = 20
+col1_pal = "YlOrRd"
+D = 0.5  # Controls inner spacing to the tree
+L1 = 0.7 # Controls length of first set of bars
+
+v2_name = "EstThetaSyn"
+col2_nbins = 100
+col2_offset = 5
+col2_pal = "YlGnBu"
+L2 = 0.7
+
+vertical = 1
+#### start pdf ####
+
+if(vertical==1){
+  if (save_pdf) cairo_pdf(paste0(fig_path, 'Figure1_batlow.pdf'), width = 7.087, height = 5.45, family = 'Arial') #useDingbats = FALSE, #width = 18, height = 14, 
+    layout(matrix(c(1,2,1,3), ncol = 2 , byrow = T), widths = c(3,1))  # Keeping original ratio initially
+
+}else if (vertical==2){
+  if (save_pdf) pdf(paste0("~/Desktop/Figure1_treeSpRateGenDiv.pdf"), width = 12, height = 15)
+  #layout(matrix(c(1,1,2,3), ncol = 2 , byrow = T), heights = c(3,1))
+  layout(matrix(c(1,1,3,2), ncol = 2 , byrow = T), heights = c(3,1))
+  
+}else if (vertical==3){
+  if (save_pdf) pdf(paste0("~/Desktop/Figure1_treeSpRateGenDiv.pdf"), width = 12, height = 14)
+  #layout(matrix(c(1,1,2,3), ncol = 2 , byrow = T), heights = c(3,1))
+  layout(matrix(c(1,1,2,3), ncol = 2 , byrow = T), heights = c(3,0.6))
+  
+}else if (vertical==4){
+  if (save_pdf) pdf(paste0("~/Desktop/Figure1_treeSpRateGenDiv.pdf"), width = 12, height = 15)
+  #layout(matrix(c(1,1,2,3), ncol = 2 , byrow = T), heights = c(3,1))
+  layout(matrix(c(2,1,3), ncol = 1 , byrow = T), heights = c(0.6,3,0.6))
+  
+}else if (vertical==5){
+  if (save_pdf) pdf(paste0("~/Desktop/Figure1_treeSpRateGenDiv.pdf"), width = 12, height = 15)
+  #layout(matrix(c(1,1,2,3), ncol = 2 , byrow = T), heights = c(3,1))
+  layout(matrix(c(4,2,1,1,3,5), ncol = 2 , byrow = T), heights = c(0.6,3,0.6))
+  
+}
+
+#### plot the tree #####
+par(mar = c(2,1,2,0))
+plot_tree = treeMCC
+plot_tree$tip.label[] = ""
+plot_tree$tip.label[1] = "..."   # to make the tree smaller, long invisible tip label was added
+tipcol = rgb(255,255,255,alpha = 255,maxColorValue = 255)
+col_tree= invisible(plot.with.rate.withNaNs(plot_tree, 
+                                            c(new_rates), NaN_color = "gray90", 
+                                            leg = F,same.scale = T, lwd = 0.55, # Reduced from 1.5
+                                            log = T, 
+                                            show.tip.label = T, tip.color = tipcol))
+
+#### collect tips coordinates ####
+lastPP <- get("last_plot.phylo", envir = .PlotPhyloEnv)
+tip <- 1:lastPP$Ntip
+XX <- lastPP$xx
+YY <- lastPP$yy
+
+#### chose tip lines colors ####
+col_v1 = c(colorRampPalette((brewer.pal(n = 8, name = col1_pal)))(col1_offset + col1_nbins))  # color palette
+v1 = c()
+for (i in treeMCC$tip.label){
+  if (i %in% gen.div$species){
+    v1 = c(v1,as.numeric(gen.div[gen.div$species == i, v1_name]))
+  }else{
+    v1 = c(v1,NA)
+  }
+}
+v1_transformed = log(v1+0.005)
+range_v1 = range(v1_transformed, na.rm = T)
+lab_v1 = c(0,0.01,0.02,0.05,0.1)
+at_v1 = log(lab_v1+0.005)
+col1 = col_v1[round(( (v1_transformed - range_v1[1]) / (range_v1[2]-range_v1[1]))*(col1_nbins-1)   )+col1_offset+1]
+
+#### add them to the tree ####
+line_position = D + c(0,L1)
+total_depth = sqrt(XX[1]^2 + YY[1]^2)
+add2depth = 0.05 * total_depth
+for (i in 1:length(treeMCC$tip.label)){
+  if (! is.na(col1[i])){
+    addx = add2depth*line_position*XX[i]/total_depth
+    addy = add2depth*line_position*YY[i]/total_depth
+    
+    lines(XX[i]+addx, YY[i]+addy, col = col1[i], lwd = 0.55, xpd = T) # Reduced from 1.5
+  }
+}
+
+#### chose tip lines colors / 2nd measure ####
+col_v2 = c("#FFFFFF", colorRampPalette((brewer.pal(n = 8, name = col2_pal)))(col2_offset + col2_nbins))  # color palette
+v2 = c()
+for (i in treeMCC$tip.label){
+  if (i %in% gen.div$species){
+    v2 = c(v2,as.numeric(gen.div[gen.div$species == i, v2_name]))
+  }else{
+    v2 = c(v2,NA)
+  }
+}
+v2_transformed = log(v2+0.005)
+range_v2 = range(v2_transformed, na.rm = T)
+lab_v2 = c(0,0.01,0.02,0.05,0.1)
+at_v2 = log(lab_v2+0.005)
+col2 = col_v2[round(( (v2_transformed - range_v2[1]) / (range_v2[2]-range_v2[1]))*(col2_nbins-1)   )+col2_offset+1]
+
+#### add them to the tree ####
+line_position = D+L1+0.05+c(0,L2)
+total_depth = sqrt(XX[1]^2 + YY[1]^2)
+add2depth = 0.05 * total_depth
+
+for (i in 1:length(treeMCC$tip.label)){
+  if (! is.na(col2[i])){
+    addx = add2depth*line_position*XX[i]/total_depth
+    addy = add2depth*line_position*YY[i]/total_depth
+    
+    lines(XX[i]+addx, YY[i]+addy, col = col2[i], lwd = 0.55, xpd = T) # Reduced from 1.5
+  }
+}
+
+### plot nodes of PGLS clades
+for (i in clades_root){
+  points(XX[i], YY[i], col = "red4", bg = "red1", pch = 21, cex = 0.417, lwd = 0.4) # Reduced from 1.2 and 1
+}
+
+#### circular arcs for analysed clades ####
+l = D + 0.05 + L1 + L2 + D
+nCT = length(clades_tips)
+clades_names = unique(names(clades_tips))
+radius = total_depth + add2depth*(l+D)
+add2text = 0.9
+further = rep(0,nCT)
+further[which(clades_names %in% c("Lagomorpha", "Squirrel-related"))] = add2text  
+set.seed(1)
+
+grays = Nodes[,c('clades','node')] %>%
+  mutate(ord = seq(1:nCT)) %>% 
+  arrange(desc(node)) %>% 
+  left_join(., cladesSum, by = 'clades') %>%
+  arrange(ord) %>% 
+  pull(col, name = clades2)
+
+for (i in 1:nCT){
+  tips = sort(clades_tips[[i]][clades_tips[[i]] <= (sub_tree$Nnode + 1)])
+  lt = length(tips)
+  tips = tips[-((lt-2):lt)]  ###why is not working for every clade with more than one species?
+  tips = tips[-(1:2)]
+  
+  xs = XX[tips]
+  ys = YY[tips]
+  xs = xs + add2depth*l*xs/total_depth
+  ys = ys + add2depth*l*ys/total_depth
+  
+  colGray <- ifelse(as.character(clades_names[i]) %in% pglsSet, grays[i], "white") #"gray90"
+  lines(xs,ys, lwd = 0.8, col = colGray)  # Reduced from 3
+  
+  lt = length(tips)
+  
+  if(lt > 1){
+    cl = T
+    
+    angle_i = acos(xs[floor(lt/2)]/(total_depth + add2depth*l))
+    if (ys[floor(lt/2)] < 0){
+      angle_i = -1 * angle_i 
+      cl = F
+    }
+    
+    if(as.character(clades_names[i]) %in% pglsSet){
+      arctext(as.character(clades_names[i]), radius = radius + further[i]*add2depth, 
+              middle = angle_i, col = grays[i], clockwise = cl, cex = 0.583, xpd = T)  
+    }
+  }
+}
+
+#### first densplot ####
+clades_tips2 <- clades_tips[names(clades_tips) %in% pglsSet]
+
+rangeX = range(XX)
+rangeY = range(YY)
+
+relative_width = 0.4
+relative_heigth = 0.35
+
+relative_rangeX = relative_width*rangeX
+relative_rangeY = relative_width*rangeY
+
+xrel = function(x,rrX = relative_rangeX, from = 0, to = 1){
+  newx = from + (to-from)*(x - min(x))/diff(range(x))
+  newx = newx*diff(rrX) + min(rrX)
+  return(newx)
+}
+
+yrel = function(x,rrX = relative_rangeY, from = 0, to = 1){
+  newx = from + (to-from)*(x - min(x))/diff(range(x))
+  newx = newx*diff(rrX) + min(rrX)
+  return(newx)
+}
+
+polygon(relative_rangeX[c(1,1,2,2)],
+        relative_rangeY[c(1,2,2,1)],
+        border = NA, col = adjustcolor("white", alpha.f = 0.8))
+
+# plot the density
+lower_y = 0.25
+densclads = lapply(clades_tips2, function(vect){density(log(ratesMCC[sapply(vect,
+                                                                            function(x){which(treeMCC$edge[,2]==x)})]))})
+dens_all = density(log(tipRatesMCC)) #new_rates for all rates and tipRatesMCC for just tip rates
+maxy = max(dens_all$y)
+for(i in 1:length(densclads)){maxy = max(max(densclads[[i]]$y),maxy)}
+
+newlower_y = yrel(c(0,lower_y,1))[2]
+for(i in 1:length(densclads)){
+  lines(xrel(c(range(dens_all$x),densclads[[i]]$x))[-c(1:2)], 
+        yrel(c(maxy,densclads[[i]]$y), from = lower_y)[-1], 
+        lwd = 0.7, col = grays[i])  # Reduced from 2
+}
+
+polygon(xrel(dens_all$x)[c(1,1:length(dens_all$x),length(dens_all$x))], 
+        c(newlower_y,yrel(c(maxy,dens_all$y), from = lower_y)[-1],newlower_y),
+        border = NA, col = adjustcolor("gray80", alpha.f = 0.5))
+lines(xrel(dens_all$x), 
+      yrel(c(maxy,dens_all$y), from = lower_y)[-1], 
+      lwd = 1.2)  # speciation rate density line
+
+# add the color legend
+axis_y = 0.15
+col_x = xrel(c(range(diff(log(ratesMCC))),
+               min(dens_all$x)+c(diff(range(dens_all$x))*(0:length(col_tree$col))/length(col_tree$col))))[-c(1,2)]
+col_y = yrel(c(0,1), from = axis_y + 0.005, to = lower_y - 0.05)  
+for(i in 1:length(col_tree$col)){
+  polygon(col_x[c(i,i+1)][c(1,1,2,2)], col_y[c(1,2,2,1)],
+          border = col_tree$col[i], col = col_tree$col[i])
+}
+
+# add the axis
+lines(relative_rangeX, yrel(c(0,0,1), from = axis_y)[1:2], lwd = 0.5)  # Reduced from 2
+lab = c(0.03,0.05,0.1,0.2,0.5,1)
+ticks = xrel(sort(c(range(dens_all$x),
+                    log(lab))))
+# text(0,relative_rangeY[1]+5,expression(Speciation~rates~"("~Myr^"-1"~")"), 
+#      cex = 0.583)  # Set to ~7pt
+
+for (i in 2:(1+length(lab))){
+  lines(ticks[c(i,i)], 
+        yrel(c(0,1), from = axis_y-0.015, to = axis_y + 0.015), 
+        lwd = 0.5)  # Reduced from 1.5
+  text(labels = lab[i-1], 
+       x = ticks[i], 
+       y = yrel(c(0,1), from = axis_y-0.05, to = axis_y + 0.015)[1],
+       cex = 0.417)  # Set to ~5pt
+}
+
+#### densities for Pi ####
+par(mar = c(0, 2, 4, 1))
+plot(1000, xlim = c(-1,1), ylim = c(-1,1), axes = F, xlab = "", ylab = "")
+lower_y = 0.25
+
+#### First measure ####
+relative_rangeX = c(0,1)
+relative_rangeY = c(-1,1)*1  # Try reducing to 0.75 to make plots more vertically compact
+
+
+dens_all1 = density(v1_transformed, na.rm = T) 
+dens_all2 = density(v2_transformed, na.rm = T) 
+ry = range(c(dens_all1$x,dens_all2$x,-6.5,-1))
+
+xrel = function(x,rrX = relative_rangeX, from = 0, to = 1){
+  newx = from + (to-from)*(x - min(x))/diff(range(x))
+  newx = newx*diff(rrX) + min(rrX)
+  return(newx)
+}
+
+yrel = function(x,rrX = relative_rangeY, from = 0, to = 1,My = ry[2],my = ry[1]){
+  newx = from + (to-from)*(x - my)/(My-my)
+  newx = newx*diff(rrX) + min(rrX)
+  return(newx)
+}
+
+dens_all = density(v1_transformed, na.rm = T) 
+densclads = lapply(clades_tips2, function(vect){density(v1_transformed[vect[vect<4065]], na.rm = T)})
+maxy = max(dens_all$y)
+for(i in 1:length(densclads)){maxy = max(max(densclads[[i]]$y),maxy)}
+
+newlower_y = xrel(c(0,lower_y,1))[2]
+for(i in 1:length(densclads)){
+  lines(y = yrel(c(range(dens_all$x),densclads[[i]]$x))[-c(1:2)], 
+        x = -xrel(c(maxy,densclads[[i]]$y), from = lower_y)[-1], 
+        lwd = 0.7, col = grays[i])  # Reduced from 2
+}
+
+polygon(y = yrel(dens_all$x)[c(1,1:length(dens_all$x),length(dens_all$x))], 
+        x = -c(newlower_y,xrel(c(maxy,dens_all$y), from = lower_y)[-1],newlower_y),
+        border = NA, col = adjustcolor("gray80", alpha.f = 0.5))
+lines(y = yrel(dens_all$x), 
+      x = -xrel(c(maxy,dens_all$y), from = lower_y)[-1], 
+      lwd = 1.2)  # Reduced from 3
+
+#### Second measure ####
+dens_all = density(v2_transformed, na.rm = T) 
+densclads = lapply(clades_tips2, function(vect){density(v2_transformed[vect[vect<4065]], na.rm = T)})
+maxy = max(dens_all$y)
+for(i in 1:length(densclads)){maxy = max(max(densclads[[i]]$y),maxy)}
+
+for(i in 1:length(densclads)){
+  lines(y = yrel(c(range(dens_all$x),densclads[[i]]$x))[-c(1:2)], 
+        x = xrel(c(maxy,densclads[[i]]$y), from = lower_y)[-1], 
+        lwd = 0.7, col = grays[i])  # Reduced from 2
+}
+
+polygon(y = yrel(dens_all$x)[c(1,1:length(dens_all$x),length(dens_all$x))], 
+        x = c(newlower_y,xrel(c(maxy,dens_all$y), from = lower_y)[-1],newlower_y),
+        border = NA, col = adjustcolor("gray80", alpha.f = 0.5))
+lines(y = yrel(dens_all$x), 
+      x = xrel(c(maxy,dens_all$y), from = lower_y)[-1], 
+      lwd = 1.2)  # Reduced from 3
+
+# add the color legends
+axis_y = 0.15
+
+c1 = col_v1
+col_x = yrel(range_v1[1]+diff(range_v1)*(0:length(c1))/length(c1))
+col_y = xrel(c(0,1), from = axis_y + 0.005, to = lower_y - 0.05)  
+
+for(i in 1:length(c1)){
+  polygon(y = col_x[c(i,i+1)][c(1,1,2,2)], x = -col_y[c(1,2,2,1)],
+          border = c1[i], col = c1[i])
+}
+
+polygon(y = c(relative_rangeY[1],col_x[1])[c(1,1,2,2)], x = -col_y[c(1,2,2,1)],
+        border = c1[1], col = c1[1])
+lx = length(c1)
+polygon(y = c(relative_rangeY[2],col_x[lx])[c(1,1,2,2)], x = -col_y[c(1,2,2,1)],
+        border = c1[lx], col = c1[lx])
+
+c2 = col_v2
+col_x = yrel(range_v2[1]+diff(range_v2)*(0:length(c2))/length(c2))
+col_y = xrel(c(0,1), from = axis_y + 0.005, to = lower_y - 0.05)  
+
+for(i in 1:length(c2)){
+  polygon(y = col_x[c(i,i+1)][c(1,1,2,2)], x = col_y[c(1,2,2,1)],
+          border = c2[i], col = c2[i])
+}
+
+polygon(y = c(relative_rangeY[1],col_x[1])[c(1,1,2,2)], x = col_y[c(1,2,2,1)],
+        border = c2[2], col = c2[2])
+lx = length(c2)
+polygon(y = c(relative_rangeY[2],col_x[lx])[c(1,1,2,2)], x = col_y[c(1,2,2,1)],
+        border = c2[lx], col = c2[lx])
+
+#### axis ####
+lines(y = relative_rangeY, x = c(axis_y,axis_y), lwd = 0.5)  # Reduced from 2
+lines(y = relative_rangeY, x = -c(axis_y,axis_y), lwd = 0.5)  # Reduced from 2
+
+lab = c(0.0001,0.002,0.005,0.01,0.02,0.05,0.1,0.2)
+ticks = yrel(sort(c(range(dens_all$x), log(lab+0.005))))
+
+for (i in 2:(1+length(lab))){
+  lines(y = ticks[c(i,i)], x = axis_y+c(-0.015, 0.015), lwd = 0.5)  ## tick
+  text(labels = lab[i-1], y = ticks[i], x = 0, cex = 0.417)  # Set to ~5pt
+  lines(y = ticks[c(i,i)], x = -axis_y+c(-0.015, 0.015), lwd = 0.5)  # Reduced from 1.5
+}
+
+# Final labels
+# text(lab = expression(paste(theta['Tsyn'])), 
+#      x = -0.2, y = 0.9, cex = 0.417)  # Set to ~5pt
+# text(lab = expression(paste(theta['Wsyn'])), 
+#      x = 0.2, y = 0.9, cex = 0.417)  # Set to ~5pt
+# text(lab = "Genetic Diversity", 
+#      x = 0, y = 1, cex = 0.583)  # Set to ~7pt
+
+#### close pdf ####
+if (save_pdf) dev.off()
+```
+<div class = "figure">
+**Figure 1.** Mammals species-level consensus phylogeny from Upham et al. (2019), with branches coloured with branch-specific speciation rates estimated with ClaDS2 (see color legend in the central inset). Bars at tips reflect estimated within-species genetic diversity for those species with 5 or more cytochrome-b sequences available: Tajima’s $\theta_{Tsyn}$ (inner circle, red color legend in the top right inset) and Watterson’s $\theta_{Wsyn}$ (outer circle, blue color legend). Central inset: distribution of tip speciation rates for all mammals (black line, shaded fill) and 14 clades with more than 20 species (coloured lines, no fill); Top-right inset: distribution of genetic diversity, log scaled following the same line colouration. Silhouette figures were contributed by various authors with a public domain license (public domain mark 1.0; CC0 1.0) from PhyloPic (http://phylopic.org). Source data are provided as a source data file.
+</div>
+
+****
+
+# Figure 2
+
+```{r,fig.width = 7.087, fig.height = 4.847}
+#### label clades that were used for PGLS analyses
+mGendivSpRate <- spRate %>%
+  filter(!set %in% 'treeMCC') %>%
+  group_by(species) %>%
+  reframe(rate_mean = mean(tipRate, na.rm = TRUE), 
+                   rate_sd = sd(tipRate, na.rm = TRUE), 
+                   rate_se = rate_sd / sqrt(n()), 
+                   rate_lower.ci = CI(tipRate, ci = 0.95)[1],
+                   rate_upper.ci = CI(tipRate, ci = 0.95)[3],
+                   clades = unique(clades)) %>%
+  arrange(clades) %>% 
+  mutate(ord = seq(1,length(n)), 
+         species = forcats::fct_reorder(species, ord),
+         clades = forcats::fct_relevel(case_when(!clades %in% unique(PGLSclade$clade) ~ "Other",
+                                                 TRUE ~ clades),"Other", after = 14)) %>%
+  inner_join(.,select(gen.div, species, EstPiSyn, EstThetaSyn, Nind), by = 'species') 
+
+tcol0 <- cladesSum %>% 
+  filter(clades %in% mGendivSpRate$clades) %>%
+  bind_rows(., data.frame(clades = 'Other',col = "gray90")) 
+
+tcol <- c( "black",as.character(tcol0[,3]))
+names(tcol) <- c("All Mammals", as.character(tcol0[,1]))
+
+pglsSet2 <- pglsSet
+names(pglsSet2) <- levels(droplevels(filter(mGendivSpRate, !clades %in% 'Other'))$clades)
+
+mGendivSpRate2 <- mGendivSpRate
+mGendivSpRate2$clades2 <- "Mammals"
+mGendivSpRate3 <- filter(mGendivSpRate, !clades %in% 'Other') %>%
+  mutate(clades2 = clades) %>%
+  bind_rows(mGendivSpRate2) %>%
+  mutate(clades2 = fct_relevel(clades2, "Mammals", after = 0))
+
+pgls2 <- bind_rows(PGLSglobalAll, PGLSclade) %>% 
+  mutate(clades2 = fct_relevel(case_when(is.na(clade) ~ 'Mammals',
+                                         TRUE ~ clade), "Mammals", after = 0),
+         label = paste0('MCC PGLS:\nEstimate = ',
+                        round(Estimate,3),
+                        '\np-value = ', formatC(pvalue,
+                                                format = "E", digits = 2))) %>% 
+  filter(term %in% 'tipRate',
+         set %in% "treeMCC", 
+         analysis %in% 'EstPiSyn') %>%
+  select(c('clade','set','analysis','df','Estimate','pvalue','clades2', 'label')) %>%
+  arrange(analysis)
+
+pglsSet2 <- paste(c('All Mammals', pglsSet), '-', pgls2$df)
+names(pglsSet2) <- levels(mGendivSpRate3$clades2)
+
+q2 <- ggplot(data = mGendivSpRate3, 
+       aes(y = EstPiSyn, x = rate_mean)) + 
+  geom_errorbarh(aes(xmin = rate_lower.ci, color = clades2,
+                     xmax = rate_upper.ci), linewidth = 0.2,
+                 alpha = 1, show.legend = F) +
+  scale_y_continuous(trans='log10',
+                    labels = trans_format("log10", math_format(10^.x))) +
+  scale_x_continuous(trans='log10') +
+  geom_smooth(aes(y = EstPiSyn, x = rate_mean), fill = "blue", 
+              color = "black", alpha = 0.1, linetype = "dashed",
+              method=lm, position = "identity", linewidth = 0.3,
+              fullrange = FALSE) +
+  scale_colour_manual(values = tcol[-16]) +
+  labs(y = expression(paste("Genetic diversity (",theta['Tsyn'],")")), 
+       x = bquote('Speciation rate ' ~ (Myr^-1))) +
+  facet_wrap(~clades2, ncol = 5,
+             labeller = labeller(clades2 = pglsSet2)) +
+  geom_text(aes(x=0.025, y=0.000133, label = label), data = pgls2,
+            size = 5, hjust = 'left', lineheight = 0.9, family = fon,
+            size.unit = 'pt' ) +
+  theme_bw(base_family = fon) + 
+  theme(plot.margin = unit(c(0.1,0.1,0.1,0.1), "cm"),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.spacing.x = unit(0.1, "lines"),
+        panel.spacing.y = unit(0.1, "lines"),
+        strip.text = element_text(size = 7, face = 'bold',
+                                margin = margin(0.1,0,0.1,0, "cm")),
+        strip.placement.x = "inside",
+        strip.background = element_rect(fill = 'white'),
+        axis.text = element_text(size = 5),
+        axis.title = element_text(size = 6),
+        axis.ticks = element_line(linewidth = 0.3),
+        axis.ticks.length = unit(0.8, "mm"))
+
+# showtext::showtext_auto(FALSE)
+# ggsave(paste0(fig_path, "Figure2.pdf"), q2,  width = 180, height = 123.12, units = "mm", device = cairo_pdf) #width = 9.5, height = 6.5
+# ggsave(paste0(fig_path, "Figure2.png"), q2,  width = 180, height = 123.12, units = "mm", device = png, type = 'cairo-png')
+# showtext::showtext_auto(TRUE)
+
+q2
+```
+<div class = "figure">
+**Figure 2.** Relationship between intraspecific genetic diversity (Tajima’s $\theta_{Tsyn}$) and speciation rate across all mammals and for each of the 14 clades with at least 20 species. The number of species included in each analysis is indicated. Speciation rates represented by their 95% confidence intervals (CIs) from 100 posterior trees; CIs are very narrow, demonstrating that estimates vary little across posterior trees. Results of the PGLS analyses on the consensus MCC tree are provided and linear regression lines with 95% confidence intervals are shown in purple for visualization purposes. Axes are log scaled. Source data are provided as a source data file.
+</div>
+
+****
+
+# Figure 3
+
+```{r, eval = TRUE, fig.height = 4.331, fig.width = 3.465, out.width = "200%"}
+pglsResult <- bind_rows(PGLSglobalAll, PGLSclade) %>% 
+  filter(!set %in% 'treeMCC', 
+         term %in% 'tipRate', 
+         analysis %in% 'EstPiSyn') %>%
+  mutate(.variable = ifelse(is.na(clade), 'All Mammals', clade),
+         pvalueBin = ifelse(pvalue < 0.05, 'Signif.','Not signif.')) %>%
+  select(clade, .variable, set, Estimate, pvalue, pvalueBin) 
+
+gl <- BMLMglobal %>%
+  filter(.chain %in% 1, model %in% 'EstPiSyn', !set %in% 'treeMCC') %>%
+  select(-.value, -.variable, -r_clades, -.chain,-.iteration,-.draw) %>%
+  rename(.value = b_logtipRate) %>%
+  mutate(.variable = 'All Mammals') %>%
+  distinct() ##around 1000 unique samples per tree set
+
+cl <- BMLMglobal %>% 
+  filter(.chain %in% 1, model %in% 'EstPiSyn', !set %in% 'treeMCC') %>%
+  select(-.chain,-.iteration,-.draw,-r_clades, -b_logtipRate) %>%
+  distinct()
+
+BMLMglobalPi <- bind_rows(gl,cl) ## makes it easier to export the data for source file
+
+pp1 <- ggplot(filter(BMLMglobalPi, .variable %in% 'All Mammals'), 
+              aes(x = .value, y = fct_rev(.variable))) +
+  geom_vline(aes(xintercept = 0),  linetype= 2, linewidth = 0.3) +
+  stat_halfeye(fill = "gray80", point_interval = median_hdi, linewidth = 0.025, size = 1, stroke = 0,
+               .width = .95, alpha = 1, scale = 0.7) + 
+  xlim(-2.14, 1.02) + 
+  geom_point(data = filter(pglsResult, .variable %in% 'All Mammals'), 
+             aes(x = Estimate, y =  fct_rev(.variable), 
+                 colour = pvalueBin), alpha = 0.7, size = 1.2, shape = 20, stroke = 0,
+             position = position_nudge(y = -0.15), show.legend = F) +
+  scale_color_manual(values = c('red','gray80')) + 
+  theme_bw(base_family = fon) + 
+  theme(axis.ticks = element_line(linewidth = 0.25),
+        axis.ticks.length = unit(0.5, "mm"),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(),
+        axis.text.x=element_blank(), 
+        axis.ticks.x=element_blank(), 
+        panel.border = element_rect(linewidth = 0.25),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        text = element_text(size=7), plot.margin = margin(t = 5, b = 0))
+
+pp2 <- ggplot(filter(BMLMglobalPi, !.variable %in% 'All Mammals'), 
+              aes(x = .value, y = fct_rev(.variable))) +
+  geom_vline(aes(xintercept = 0), linetype= 2, linewidth = 0.3) +
+  stat_halfeye(fill = "gray80",  point_interval = median_hdi, linewidth = 0.025, size = 1, stroke = 0,
+               .width = .95, alpha = 1, scale = 0.7, show.legend = F ) +
+  scale_y_discrete(labels=rev(pglsSet))  +
+  geom_point(data = filter(pglsResult, !.variable %in% 'All Mammals'), 
+             aes(x = Estimate, y =  fct_rev(.variable), 
+                 colour = pvalueBin), alpha = 0.7, size = 1.2, shape = 20, stroke = 0,
+             position = position_nudge(y = -0.15), show.legend = F) +
+  scale_colour_manual(values = c('gray80','red')) + 
+  labs(x = "Slope Estimates") +
+  xlim(-2.14, 1.02) + 
+  theme_bw(base_family = fon) + 
+  theme(axis.ticks = element_line(linewidth = 0.25),
+        axis.ticks.length = unit(0.5, "mm"),
+        axis.title.y=element_blank(),
+        axis.text.y = element_text(colour = rev(tcol[2:15])),
+        axis.text.x = element_text(size = 5),
+        axis.title.x = element_text(size = 6),
+        panel.border = element_rect(linewidth = 0.25),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        text = element_text(size=7))
+
+# p3 = ggarrange(pp1, pp2, nrow = 2, heights = c(0.3, 2), align = "v")
+
+p3 = pp1 / pp2 + 
+  plot_layout(heights = c(0.2, 2)) + 
+  theme(plot.margin = margin(0,0,0,0)) 
+
+# showtext::showtext_auto(FALSE)
+# ggsave(paste0(fig_path, 'Figure3.pdf'), p3, height = 110, width = 88, units = "mm", device = cairo_pdf)
+# ggsave(paste0(fig_path, 'Figure3.png'), p3, height = 110, width = 88, units = "mm", device = png, type = 'cairo-png')
+# showtext::showtext_auto(TRUE)
+
+p3
+```
+<div class = "figure">
+**Figure 3.** Slope estimates of the relationship between intraspecific genetic diversity ($\theta_{Tsyn}$) and speciation rates for all mammals (top panel) and each of the 14 clades with at least 20 species (bottom panel). The grey density plots with median point and 95% confidence intervals in black represent the estimated posterior distribution of slopes obtained with the Bayesian Multilevel Models (BMLM) pulled across 100 trees. The points below represent the slopes estimated with Phylogenetic Generalized Least Squares analyses conducted on each of the 100 trees and are coloured in red when significant (p-value < 0.05). Source data are provided as a source data file.
+</div>
+
+****
+
+# Table 1
+
+```{r, cache = TRUE, results='asis'}
+pglsResulttraitsMCC <- PGLSglobalAll %>% 
+  filter(analysisType %in% 'global_traits',
+         set %in% 'treeMCC', 
+         !term %in% 'Intercept') %>%
+  ungroup() %>%
+  mutate(`p-value` = ifelse(pvalue < 0.001, "<0.001", round(pvalue,4)),
+         term = recode(term, tipRate = !! "\u03BB", 
+                       latitude_mean = "Mean latitude",
+                       mean_temp = "Mean temperature",
+                       #geoArea = "Range area",
+                       BodyMassKg_notInputed = "Body Mass",
+                       GenerationLength_d = "Generation length",
+                       litter_or_clutch_size_n = "Litter size"),
+         ana = 'PGLS') %>%
+  select(analysis, Estimate, term,SE, pvalue, ana)
+
+BMLMglobal_traitsExt <- BMLMglobal_traits %>%
+  select(-.chain,-.iteration,-.draw) %>%
+  rename(term = .variable, Estimate = .value, analysis = model) %>%
+  mutate(ana = 'BMLM') 
+
+BMLMglobal_traitsExtMCC <- filter(BMLMglobal_traitsExt, set %in% 'treeMCC') %>%
+  group_by(term, analysis) %>%
+  median_qi(Estimate) %>%
+  mutate(term = recode(term, b_logtipRate = !! "\u03BB",
+                       b_loglatitude_mean = "Mean latitude",
+                       b_logmean_temp = "Mean temperature",
+                       b_logBodyMassKg_notInputed = "Body Mass",
+                       b_logGenerationLength_d = "Generation length", 
+                       b_loglitter_or_clutch_size_n = "Litter size"),
+         ana = 'BMLM',
+         `95% CI` = paste0("[",round(.lower,3),"; ",round(.upper,3),"]"),
+         sign95 = case_when(Estimate > 0 & .lower > 0 & .upper > 0 ~ "sign.",
+                            Estimate < 0 & .lower < 0 & .upper < 0 ~ "sign.",
+                            TRUE ~ "NotSign.")) %>%
+  select(-(.lower:.interval))
+
+BMLMPGLSmcc <- bind_rows(pglsResulttraitsMCC, 
+                         select(BMLMglobal_traitsExtMCC, -sign95)) %>%
+    mutate(term = ifelse(term == "Mean latitude", "Latitudinal midpoint", term)) %>%
+  mutate(term = fct_relevel(term,!! "\u03BB", "Latitudinal midpoint", "Mean temperature", 
+                            "Body Mass", "Generation length", "Litter size")) %>% 
+  mutate_if(is.numeric, round, 3) %>%
+  pivot_wider(names_from = ana, 
+              values_from = c(Estimate, SE, pvalue, `95% CI`)) %>%
+  dplyr::select(-c("SE_BMLM","pvalue_BMLM","95% CI_PGLS")) %>%
+  relocate(Estimate_BMLM, .before = "95% CI_BMLM") %>%
+  pivot_wider(names_from = analysis, 
+              values_from = Estimate_PGLS:`95% CI_BMLM`) 
+
+BMLMPGLSmccRed <- BMLMPGLSmcc[,c(1,3,6,9,12,15,
+                                 4,7,10,13,16,
+                                 2,5,8,11,14)] %>%
+  select(-starts_with("pvalue")) %>% 
+  arrange(term)
+
+ps <- BMLMPGLSmcc %>%
+  arrange(match(term, BMLMPGLSmccRed$term)) %>% ## arranges order according to levels
+  select(starts_with("pvalue"))
+
+bs <- select(BMLMglobal_traitsExtMCC, term, analysis, sign95) %>%
+  pivot_wider(names_from = analysis, 
+              values_from = sign95) %>%
+  arrange(match(term, BMLMPGLSmccRed$term))
+
+
+typology <- tibble(col_keys = names(BMLMPGLSmccRed), 
+                   name = names(BMLMPGLSmccRed)) %>%
+  separate(name, sep = "_" , into = c('stat', 'analysis', 'model'))
+
+ft <- autofit(flextable(BMLMPGLSmccRed)) %>%
+  set_header_df(mapping = typology[,c(1,4,3,2)], key = "col_keys" ) %>%
+  merge_h(part = "header") %>%
+  merge_v(part = "header") %>%
+  flextable::compose(i = 1, j = 2, part = "header", value = as_paragraph("\U03B8", as_sub("T"), " ~ Traits")) %>%
+  flextable::compose(i = 1, j = 6, part = "header", value = as_paragraph("\u03BB", " ~ Traits")) %>%
+  flextable::compose(i = 1, j = 10, part = "header", value = as_paragraph("\U03B8", as_sub("T"), " ~ ", "\u03BB", " + Traits")) %>%
+  colformat_num(j = colnames(BMLMPGLSmccRed), na_str = "", digits = 3) %>%
+  theme_booktabs(fontsize = 10) %>%
+  fix_border_issues() %>%
+  align_nottext_col(align = "center", header = TRUE) %>%
+  vline(j = 3, border = officer::fp_border(), part = "all") %>%
+  vline(j = 5, border = officer::fp_border(width = 2), part = "all") %>%
+  vline(j = 7, border = officer::fp_border(), part = "all") %>%
+  vline(j = 9, border = officer::fp_border(width = 2), part = "all") %>%
+  vline(j = 11, border = officer::fp_border(), part = "all") %>%
+  bold(j = 1, part = 'all') %>%
+  bold(j = 2, i = which(ps$pvalue_PGLS_piTraits < 0.05), part = 'body') %>%
+  bold(j = 6, i = which(ps$pvalue_PGLS_SpRateTraits < 0.05), part = 'body') %>%
+  bold(j = 10, i = which(ps$pvalue_PGLS_piSpRateTraits < 0.05), part = 'body') %>%
+  bold(j = 4, i = which(bs$piTraits %in% 'sign.'), part = 'body') %>%
+  bold(j = 8, i = which(bs$SpRateTraits %in% 'sign.'), part = 'body') %>%
+  bold(j = 12, i = which(bs$piSpRateTraits %in% 'sign.'), part = 'body') %>%
+  add_footer_lines("PGLS and BMLM analyses on the MCC tree. PGLS and BMLM estimates in bold are significantly different from zero (p<0.05)")
+
+#save_as_image(ft, path = paste0(fig_path,"table1.png"))
+ft
+```
+<div class = "table">
+**Table 1.** Correlations between genetic diversity ($\theta_{Tsyn}$), speciation rates ($\lambda$) and species-specific covariates. The left and middle columns report results for the association between $\theta_{Tsyn}$ (respectively ) and each covariate from the combined analysis. The right column reports results for the association between $\theta_{Tsyn}$ and $\lambda$ when accounting for all covariates (top row), and between $\theta_{Tsyn}$ and each covariate when accounting for and other covariates (bottom rows). PGLS and BMLM analyses on the MCC tree. 
+</div>
+
+****
+
+# Figure 4
+
+```{r, fig.height = 2.992, fig.width = 3.464, cache = FALSE, out.width = "200%"}
+pglsResultMR <- PGLSglobalAll %>% 
+  filter(!term %in% 'intercept', analysisType %in% 'global_mutRate') %>%
+  mutate(pvalueBin = ifelse(pvalue < 0.05, 'Signif.','Not signif.'),
+         ana = 'PGLS') %>%
+  select(analysis, set, Estimate, term, pvalue, pvalueBin, ana) %>% 
+  data.frame()
+
+pglsResultMR$analysis <- factor(pglsResultMR$analysis, ###"MutyRateSpRate" "NeySpRate"  
+                                labels = c(expression(paste(mu,' ~ ', lambda)),
+                                           expression(paste(N["e"], ' ~ ', lambda))))
+
+BMLMglobal_mutRateExt <- BMLMglobal_mutRate %>%
+  select(-.chain,-.iteration,-.draw) %>%
+  rename(term = .variable, Estimate = .value, analysis = model) %>%
+  mutate(term = case_when(term %in% "b_logtipRate"  ~ "tipRate"),
+         ana = 'BMLM') %>%
+  data.frame()
+
+
+BMLMglobal_mutRateExt$analysis <- factor(BMLMglobal_mutRateExt$analysis, 
+                                         labels = c(expression(paste(mu,' ~ ', lambda)),
+                                                    expression(paste(N["e"],' ~ ', lambda))))
+
+sumBMLM <- BMLMglobal_mutRateExt %>%
+  group_by(term, analysis, set) %>%
+  median_qi(Estimate) %>%
+  rename(medianEstimate = Estimate)
+
+dt <- filter(BMLMglobal_mutRateExt, !set %in% 'treeMCC', 
+             analysis %in% c('paste(mu, " ~ ", lambda)',
+                             'paste(N["e"], " ~ ", lambda)'))
+blmlplot1 <- ggplot(dt) + 
+  stat_halfeye(aes(x = Estimate, y =  term), 
+               point_interval = median_qi, linewidth = 0.3, stroke = 0,
+               .width = .95, size = 1.3, alpha = 1) +
+  geom_pointintervalh(data = filter(sumBMLM, set %in% 'treeMCC',
+                                    analysis %in% c('paste(mu, " ~ ", lambda)',
+                                                    'paste(N["e"], " ~ ", lambda)')),
+                      aes(x = medianEstimate, y = term,
+                          xmin =.lower, xmax = .upper), 
+                      shape = 17, size = 1, linewidth = 0.2, stroke = 0,
+                      fatten_point = 3, position = position_nudge(y = -0.7)) +
+  geom_point(data = filter(pglsResultMR, !set %in% 'treeMCC', term %in% 'tipRate',
+                           analysis %in% c('paste(mu, " ~ ", lambda)',
+                                           'paste(N["e"], " ~ ", lambda)')),
+             aes(x = Estimate, y =  term, color = pvalueBin),
+             size = 1.2, show.legend = F, alpha = 0.4, stroke = 0,
+             position = position_nudge(y = -0.2)) +
+  scale_colour_manual(values=c('gray80','red')) + 
+  geom_point(data = filter(pglsResultMR, set %in% 'treeMCC', term %in% 'tipRate', 
+                           analysis %in% c('paste(mu, " ~ ", lambda)',
+                                           'paste(N["e"], " ~ ", lambda)')),
+             aes(x = Estimate, y =  term, color = pvalueBin),
+             size = 2, show.legend = F, alpha = 0.5, shape = 17, stroke = 0,
+             position = position_nudge(y = -0.9)) +
+  geom_vline(aes(xintercept = 0), linetype= 2, linewidth = 0.3) +
+  facet_wrap(~fct_rev(analysis), labeller = label_parsed, ncol = 1,
+             strip.position = "right") +
+  theme_bw() + xlim(-0.82,0.22) +
+  labs(x = "Slope Estimates") +
+  theme(axis.ticks = element_line(linewidth = 0.25),,
+        axis.ticks.length = unit(0.5, "mm"),
+        axis.title.y = element_blank(), 
+        axis.text.y = element_blank(), 
+        axis.ticks.y = element_blank(),
+        axis.text = element_text(size = 5),
+        axis.title.x = element_text(size = 6),
+        strip.text.y.right = element_text(size = 7, margin = margin(l = 0, r = 0)),
+        strip.background = element_rect(fill = NA),
+        panel.spacing = unit(0.3, "mm"), 
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.margin = margin(0, 0, 0, 0))
+
+mgendivSpRateMutRate <- gendivSpRateMutRate %>%
+  filter(!set %in% 'treeMCC') %>%
+  group_by(species) %>%
+  dplyr::summarise(SpRate_mean = mean(tipRate, na.rm = TRUE), 
+                   SpRate_lower.ci = CI(tipRate, ci = 0.95)[1],
+                   SpRate_upper.ci = CI(tipRate, ci = 0.95)[3],
+                   MutRate_mean = mean(mutRate_y, na.rm = TRUE), 
+                   MutRate_lower.ci = CI(mutRate_y, ci = 0.95)[1],
+                   MutRate_upper.ci = CI(mutRate_y, ci = 0.95)[3],
+                   Ne_mean = mean(Ne_y, na.rm = TRUE), 
+                   Ne_lower.ci = CI(Ne_y, ci = 0.95)[1],
+                   Ne_upper.ci = CI(Ne_y, ci = 0.95)[3],
+                   EstPiSyn = mean(EstPiSyn, na.rm = TRUE)) %>%
+  drop_na()  %>%
+  pivot_longer(cols = MutRate_mean:Ne_upper.ci,
+               names_to = c("variable", "x"),
+               names_sep = "_") %>%
+  pivot_wider(names_from = "x",
+              values_from = "value")
+
+mgendivSpRateMutRate$variable <- factor(mgendivSpRateMutRate$variable, 
+                                        levels = c("Ne", "MutRate"),
+                                        labels = c(expression(paste(N["e"])),
+                                                   expression(paste("Mutation Rate - ", mu, ' (per year)'))))
+
+## mutation rate vs speciation rate
+p1 = ggplot(mgendivSpRateMutRate, aes(y = mean, x = SpRate_mean)) +
+  geom_errorbarh(aes(xmin = SpRate_lower.ci, xmax = SpRate_upper.ci), color = "gray50", linewidth = 0.15) +
+  geom_errorbar(aes(ymin = lower.ci, ymax = upper.ci), color = "gray50", linewidth = 0.15) +
+  geom_point(size = 0.09, fill = "gray50", color = "gray90", stroke = 0.05, shape = 21) +
+  geom_smooth(method=lm, position = "identity", color = 'black', se = F, linewidth = 0.3) + 
+  scale_x_log10(breaks = breaks_log(n = 8), labels = label_number()) +
+  scale_y_log10(labels = trans_format("log10", math_format(10^.x)), 
+                breaks = breaks_log(n = 6)) +
+  facet_wrap(variable ~ .,  labeller = label_parsed, 
+             scales = 'free_y', ncol = 1, strip.position = "left" ) + theme_bw() + 
+  labs(y = "", x = expression(paste('Speciation rate - ', lambda, ' ' ,(Myr^-1)))) +
+  theme(axis.title.y = element_blank(), 
+        axis.text = element_text(size = 5),
+        axis.title = element_text(size = 6),
+        axis.ticks = element_line(linewidth = 0.25),
+        axis.ticks.length = unit(0.5, "mm"),
+        strip.text.y.left = element_text(size = 6, margin = margin(l = 0, r = 0)), 
+        strip.placement = "outside", 
+        strip.background.y = element_blank(), 
+        panel.spacing = unit(0.3, "mm"), 
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        plot.margin = margin(0, 0, 0, 0))
+
+q4 = (p1 + blmlplot1) + 
+    plot_layout(ncol = 2, widths = c(1.1, 1)) + 
+  theme(plot.margin = margin(0,0,0,0))
+
+# showtext::showtext_auto(FALSE)
+# ggsave(paste0(fig_path, 'Figure4.pdf'), q4, height = 76, width = 88, units = 'mm', device = cairo_pdf)
+# ggsave(paste0(fig_path, 'Figure4.png'), q4, height = 76, width = 88, units = 'mm', device = png, type = 'cairo-png')
+# showtext::showtext_auto(TRUE)
+
+q4
+```
+<div class = "figure">
+**Figure 4.** Relationships between speciation rate ($\lambda$) and the two theoretical components of $\theta$: effective population size ($N_e$) and mutation rate ($\mu$). Mutation rates are computed using the scaling of phylogenetic branch lengths in units of substitutions versus time (in years) for 100 trees, and Ne is computed using the ratio of genetic diversity to mutation rates. Left panels: mean $\lambda$, $N_e$ and $\mu$ across 100 trees and 95% confidence intervals are shown, with a regression line and log scaled axes. Right panels: slope estimates from BMLM analyses on 100 trees (shaded distributions) and MCC tree (triangles). The black intervals represent the corresponding 95% credibility intervals and the medians. The circles (and triangle) below each of these plots represent PGLS estimates and are coloured red when significant (p-value < 0.05). Source data are provided as a source data file.
+</div>
+
+******
+
+# Supplementary figures
+
+## Fig. S1. Number of individuals used to estimate genetic diversity + Original and mean of subsampled estimates of genetic diversity
+
+```{r, eval = TRUE, fig.width=6, fig.height=5}
+gen.div0 <- read.delim(paste0(folder_path, '4.genetic_diversity/outputs/GenDiv_SynNonSyn_resampled4ind.txt'))  %>%
+  mutate(Nind5 = case_when(Nind == 5 ~ "5 ind.",
+                           TRUE ~ ">5 ind."),
+         subPiSyn_mean = ifelse(is.na(subPiSyn_mean), EstPiSyn,
+                                subPiSyn_mean),
+         subThetaSyn_mean = ifelse(is.na(subThetaSyn_mean), EstThetaSyn,
+                                   subThetaSyn_mean),
+         outPiSyn = ifelse(Nind == 5, "5 ind.",
+                           as.character(outPiSyn)),
+         outPiSyn = ifelse(EstPiSyn == 0, "out",
+                           as.character(outPiSyn)),
+         outThetaSyn = ifelse(Nind == 5, "5 ind.", 
+                              as.character(outThetaSyn)),
+         outThetaSyn = ifelse(EstThetaSyn == 0, "out",
+                              as.character(outThetaSyn)))
+
+p = ggplot(gen.div0) + 
+  geom_point(aes(y = EstPiSyn, x = subPiSyn_mean, 
+                 alpha = fct_infreq(outPiSyn), color = fct_infreq(outPiSyn)), shape = 1) +
+  scale_x_log10() + scale_y_log10() + theme_bw() +
+  labs(y = expression(paste("Original ", theta["Tsyn"])), 
+       x = expression(paste("Mean subsampled ", theta['Tsyn']))) + 
+  scale_color_manual(values = c('black',"#71D692","#805C31"),
+                     labels = c("Included", "With 5 ind.",
+                                "Excluded"), 
+                     name = expression(paste("Included species from ", theta['Tsyn']))) +
+  scale_alpha_manual(values = c(0.1, 0.4, 1),
+                     labels = c("Included", "With 5 ind.",
+                                "Excluded"), 
+                     name = expression(paste("Included species from ", theta['Tsyn']))) +
+  theme(legend.title = element_text(color = col_v1[95]))
+
+
+t = ggplot(gen.div0) + 
+  geom_point(aes(y = EstThetaSyn, x = subThetaSyn_mean, 
+                 alpha = fct_infreq(outThetaSyn), 
+                 color = fct_infreq(outThetaSyn)), shape = 1) +
+  scale_x_log10() + scale_y_log10() + theme_bw() +
+  labs(y = expression(paste("Original ", theta[Wsyn])), x = expression(paste("Mean subsampled ", theta[Wsyn]))) + 
+  scale_color_manual(values = c('black',"#71D692","#805C31"), ##D14D36
+                     labels = c("Included", 
+                                "With 5 ind.",
+                                "Excluded"), 
+                     name = expression(paste("Included species from ", theta['Wsyn']))) +
+  scale_alpha_manual(values = c(0.1, 0.4, 1),
+                     labels = c("Included", 
+                                "With 5 ind.",
+                                "Excluded"), 
+                     name = expression(paste("Included species from ", theta['Wsyn']))) +
+  theme(legend.title = element_text(color = col_v2[90]))
+
+```
+
+```{r, eval = TRUE, fig.width=10, fig.height=5}
+n1 <- ggplot(gen.div0, aes(Nind)) + 
+  geom_histogram(aes(y=after_stat(density)), bins = 31, fill = "gray70", colour = "white") +
+  geom_density( fill = "white", alpha = 0.5) + 
+  scale_x_log10() + 
+  theme_bw() + labs(y = "Counts", x = "Number of individuals") + 
+  scale_y_continuous(breaks=c(0.000, 0.250, 0.500, 0.750, 1.000), 
+                     labels= function(x) sprintf("%.3f", x)) +
+  theme(panel.grid = element_blank())
+
+dt <- gen.div0 %>% 
+  select(Nind, species, EstPiSyn, EstThetaSyn) %>%
+  pivot_longer(cols=EstPiSyn:EstThetaSyn) 
+
+n2 <- ggplot(dt, aes(x = Nind)) + geom_point(aes(y = value, colour = name),  alpha = 0.4) + 
+  scale_color_manual(values = c(col_v1[95], col_v2[90]),
+                     labels = c(expression(paste("Estimated" ~ theta['Tsyn'])), 
+                                expression(paste("Estimated" ~ theta['Wsyn']))), 
+                     name = "Genetic diversity") +  
+  theme_bw() + labs(y = "Genetic diversity", x = "Number of individuals") + 
+  theme(legend.position="top",
+        panel.grid = element_blank()) + 
+  scale_y_continuous(trans = "log10", breaks=c(0.00, 0.001,0.005, 0.01,0.05, 0.10)) +
+  scale_x_continuous(trans = "log10", breaks=c(5, 10, 20, 50, 100,500, 1000))
+
+# npnt <- ggarrange(n1,p, n2,  t, ncol = 2, nrow = 2, 
+#                   align = "hv", widths = c(0.75,1.1,0.75,1.1), labels = c("A","C","B","D"))
+
+npnt1 <- (n1 | p) / (n2 | t) + plot_layout(widths = c(0.75, 1.1, 0.75, 1.1))
+
+# showtext::showtext_auto(FALSE)
+# ggsave(paste0(fig_path, 'FigS1.pdf'), npnt1, width = 10, height = 5, device = cairo_pdf)
+# ggsave(paste0(fig_path, 'FigS1.png'), npnt1, width = 10, height = 5, device = png, type = 'cairo-png')
+# showtext::showtext_auto(TRUE)
+
+npnt1
+```
+<div class = "figure">
+**Supplementary Figure 1:** Number of sequences with estimated genetic diversities obtained per species (A and B) and original vs mean subsampled genetic diversity estimates (C and D). All species with exactly five individuals were included (green in C and D). Species with genetic diversity above zero for which the estimated $\theta$ is outside the range of $\theta$s 1000 subsampled replicates to five individuals were excluded (brown in C and D) for analyses.
+</div>
+
+****
+
+## Fig. S2. Genetic diversity and speciation rates per clade
+
+```{r, eval = TRUE, fig.height= 8, fig.width= 8}
+dt <- mGendivSpRate %>%
+    filter(!clades %in% 'Other') %>%
+    select(species, rate_mean, EstPiSyn, EstThetaSyn, clades) %>%
+    mutate(clades = ifelse(clades %in% changeClades$clades, 
+                            as.character(changeClades$newNames[match(clades, changeClades$clades)]),
+                            as.character(clades))) %>%
+    pivot_longer(cols = c(EstPiSyn:EstThetaSyn)) 
+
+tr =  ggplot(dt) + 
+  geom_boxplot(aes(x = value, color = fct_rev(name), y = fct_rev(fct_inorder(clades))), 
+               alpha = 0.2) + 
+  scale_x_log10() + 
+  theme_bw() + 
+  scale_color_manual(
+    values = c("EstPiSyn" = col_v1[95], "EstThetaSyn" = col_v2[90]),
+    labels = c("EstPiSyn" = expression(paste("Estimated " ~ theta["Tsyn"])),
+               "EstThetaSyn" = expression(paste("Estimated " ~ theta["Wsyn"]))),
+    name = NULL,
+    breaks = c("EstPiSyn", "EstThetaSyn") 
+  ) +
+  theme(panel.grid = element_blank(),
+        panel.grid.major.x = element_line(color = "gray70", linewidth = 0.3, linetype = "dashed"),
+        axis.text.y = element_text(colour = rev(tcol[2:15]), face = 'bold'),
+        legend.position = "bottom",
+        plot.margin = unit(c(1,0,1,0), "cm")) + 
+  guides(fill = 'none') + 
+  labs(x = expression(paste("Genetic diversity - ", theta)), y = "") 
+
+r = ggplot(dt) + 
+  geom_boxplot(aes(x = rate_mean, y = fct_rev(fct_inorder(clades))), alpha = 0.2) + 
+  scale_x_log10() + 
+  labs(x = expression(paste("Mean speciation rate - ", lambda, " (Myr"^{-1}, ")")), y = NULL) + 
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    panel.grid.major.x = element_line(color = "gray70", linewidth = 0.3, linetype = "dashed"),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        plot.margin = unit(c(1,1,1,0), "cm")) 
+
+
+# Combine plots using patchwork
+trr = tr + r + plot_layout(ncol = 2)
+
+# showtext::showtext_auto(FALSE)
+# ggsave(paste0(fig_path, "FigS2.pdf"), trr, width = 8, height = 8, device = cairo_pdf)
+# ggsave(paste0(fig_path, "FigS2.png"), trr, width = 8, height = 8, device = png, type = 'cairo-png')
+# showtext::showtext_auto(TRUE)
+
+trr
+```
+<div class = "figure">
+**Supplementary Figure 2:** Genetic diversity (left panel) and tip speciation rates (right panel, species mean rates from 100 posterior trees) for the 14 clades with at least 20 species.
+</div>
+
+
+****
+
+## Fig. S3. Distribution of tip speciation rates 
+
+```{r, eval = TRUE, fig.width=8,fig.height=5, cache = FALSE}
+meanTipRateClade <- gendivSpRateMutRate %>%
+  filter(!set %in% 'treeMCC') %>%
+  group_by(species) %>%
+  dplyr::summarise(SpRate_mean = mean(tipRate, na.rm = TRUE)) %>%
+  left_join(., clades, by = 'species')
+
+ps3 <- ggplot() +
+  stat_density(data =  filter(meanTipRateClade, clades %in%
+                                tcol0$clades[-15]),
+               aes(SpRate_mean, colour = clades), 
+               geom="line", position="identity", 
+               linewidth = 0.5, show.legend = T) +
+  scale_colour_manual(values = tcol[2:15],
+                      labels = pglsSet) + 
+  labs(x = bquote('Mean tip speciation rates '~(Myr^-1)), 
+       y = 'Density', colour = "Clades") + 
+  geom_density(data =  meanTipRateClade, aes(x=SpRate_mean), 
+               fill = NA, size = 1) + 
+  geom_vline(data =  meanTipRateClade,
+             aes(xintercept = mean(SpRate_mean)), linewidth = 0.8,
+             linetype = 2, colour = 'gray50') +
+  theme_bw() + 
+  theme(panel.background = element_rect(fill = '#ffffff'),
+        panel.grid = element_blank(),
+        legend.position = 'bottom',
+        legend.key.height = unit(0.2, 'lines'), 
+        legend.margin = margin(t = 0, r = 0, b = 0, l = 0)) +
+  scale_y_continuous(expand = c(0,0.05) ) +
+  scale_x_continuous(trans='log10', expand = c(0,0.05) ) 
+
+# showtext::showtext_auto(FALSE)
+# ggsave(paste0(fig_path, 'FigS3.pdf'), ps3, width = 8, height = 5, device = cairo_pdf)
+# ggsave(paste0(fig_path, 'FigS3.png'), ps3, width = 8, height = 5, device = png, type = 'cairo-png')
+# showtext::showtext_auto(TRUE)
+
+ps3
+```
+<div class = "figure">
+**Supplementary Figure 3:** Distribution of species-specific speciation rates ($\lambda$) estimated from 100 posterior trees across the global mammal tree (black) and for the 14 clades with at least 20 species (coloured).
+</div>
+
+****
+
+## Fig. S4. PGLS results with R2 across 100 posterior trees and MCC tree
+
+```{r, eval = FALSE}
+library(rr2) ## Ives et al. 2018 R2s
+
+pglsListR2 <- readRDS(paste0(folder_path,'7.pgls/outputs/gendivSpRate_PGLS_R2EstPiSyn.rds'))
+
+dtR2 <- data.frame()
+for (tree in names(pglsListR2)){
+  fit1 <- pglsListR2[[tree]][[1]]
+  class(fit1) <- "gls"
+  dtR2 <- bind_rows(dtR2, cbind(tree, as.data.frame(summary(fit1)$tTable)[2,c(1,4)],
+                                as.character(summary(fit1)$modelStruct), pglsListR2[[tree]][[2]][['R2_lik']],pglsListR2[[tree]][[2]][['R2_resid']]))
+}
+
+colnames(dtR2) <- c("set", "Estimate","pvalue","lambda","R2_lik","R2_resid")
+saveRDS(dtR2, paste0(folder_path,'7.pgls/outputs/gendivSpRate_PGLS_R2EstPiSyn_summarize.rds'))
+```
+
+```{r, fig.height=5, fig.width=8, eval = TRUE}
+dtR2 <- readRDS(paste0(folder_path,'7.pgls/extra/gendivSpRate_PGLS_R2EstPiSyn_summarize.rds'))
+### make boxplot with each panel for slope estimate, p-value, lambda and R2resid
+
+# Also shown is the PGLS slope estimate, significance, lambda transformation and explained variance for the consensus tree (R2resid; estimated as Ives 2019). 
+dtR2 <- dtR2 %>%
+  mutate(lambda = as.numeric(lambda)) %>%
+  pivot_longer(cols = -set) %>%
+  mutate(name = factor(name, levels = c("Estimate","pvalue",
+                                        "lambda","R2_resid", "R2_lik")))
+
+ps4 <- ggplot(filter(dtR2, !set %in% 'treeMCC'), 
+            aes(x = name, y = value)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(alpha = 0.4, size = 0.7) +
+  geom_point(data = filter(dtR2, set %in% 'treeMCC'),
+             aes(x = name, y = value), color = "red", size = 1.2) +
+  facet_wrap(~name, scales = "free", nrow = 1) + 
+  ggh4x::facetted_pos_scales(
+    y = list(name == "pvalue" ~ scale_y_log10())) +
+  theme_bw() +
+  theme(strip.background = element_blank(),
+        strip.text.x = element_blank()) +
+  labs(x = "", y = expression(paste(theta['T'],"~", lambda, " PGLS output"))) + 
+  scale_x_discrete(breaks = levels(dtR2$name),
+                   labels = c("Slope estimate",
+                              "p-value", expression(paste("Pagel's ", lambda)),
+                              expression(paste("R"['resid']^"2")),
+                              expression(paste("R"['lik']^"2"))))
+
+# showtext::showtext_auto(FALSE)
+# ggsave(paste0(fig_path, "FigS4.pdf"), ps4, width = 8, height = 5, device = cairo_pdf)
+# ggsave(paste0(fig_path, "FigS4.png"), ps4, width = 8, height = 5, device = png, type = 'cairo-png')
+# showtext::showtext_auto(TRUE)
+
+ps4
+```
+<div class = "figure">
+**Supplementary Figure 4:** Output from PGLS analysis using $\theta_{Tsyn}$ as response variable with $R^2$ estimates from Ives 2019, across 100 posterior trees (black) and MCC tree (red).
+</div>
+
+
+****  
+
+## Fig. S5. Comparing models using different $\theta$ estimates
+
+```{r,fig.width = 8, fig.height = 10, cache = FALSE, eval = TRUE}
+###prepare PGLS plotting
+pgls2 <- bind_rows(PGLSglobalAll, PGLSclade) %>%
+  filter(term %in% 'tipRate', !analysisType %in% c("global_traits","global_mutRate", 'other')) %>%
+  select(c('clade','set','analysis','Estimate','pvalue')) %>%
+  mutate(colour = case_when(is.na(clade) ~ 'All Mammals',
+                            TRUE ~ 'clades'),
+         size = case_when(set %in% 'treeMCC' ~ 'MCC',
+                          TRUE ~ 'Posterior'),
+         pvalue = ifelse(pvalue < 0.05, "sig.", "not sig."),
+         shape = paste0(analysis,"_", pvalue),
+         analysis = fct_relevel(analysis,"EstPiSyn", "SubPiSyn", "EstThetaSyn","SubThetaSyn"),
+         clade = ifelse(is.na(clade), 'ALL', as.character(clade))) %>%
+  arrange(analysis)
+
+sig <- c('black','white')
+ppgls <- ggplot(pgls2) +
+  geom_point(aes(y = Estimate, x = clade, 
+                 group = analysis, 
+                 size = fct_infreq(size), 
+                 colour = fct_inorder(shape),
+                 shape = fct_rev(pvalue),
+                 fill = fct_inorder(shape)
+  ), 
+  stroke = 0.5, #alpha = 0.2,
+  position = position_dodge(width = 0.65)) +
+  geom_vline(xintercept = 1.5, size = 0.2, linetype = 'dashed') +
+  geom_hline(yintercept = 0, size = 0.2) + 
+  theme_bw() +
+  scale_shape_manual(name = 'PGLS sig.',
+                     values = c(23, 21), 
+                     labels = c("< 0.05", "> 0.05"),
+                     guide = guide_legend(override.aes =
+                                            list(color = c("black","gray90"),
+                                                 alpha = 1), nrow=2)
+  ) +
+  scale_colour_manual(name = 'PGLS sig.',
+                      values = rep(sig, 4),
+                      guide = "none"
+                      #breaks = unique(pgls2$shape)[1:2],
+                      # labels = c("< 0.05", "> 0.05"),
+                      # guide = guide_legend(override.aes =
+                      #                 list(color = c("gray90","black"),
+                      #                      alpha = 1), nrow=2)
+  ) +
+  scale_fill_manual(name = 'Genetic diversity',
+                    values = c(col_v1[98], col_v1[98],
+                               col_v1[70], col_v1[70],
+                               col_v2[98], col_v2[98],
+                               col_v2[70], col_v2[70]),
+                    labels = c(expression(paste("Original" ~ theta['Tsyn'])),
+                               expression(paste("Subsampled" ~ theta['Tsyn'])),
+                               expression(paste("Original" ~ theta['Wsyn'])),
+                               expression(paste("Subsampled" ~ theta['Wsyn']))),
+                    guide = guide_legend(override.aes =
+                                           list(color = c(col_v1[98], col_v1[70],
+                                                          col_v2[98], col_v2[70],
+                                                          NA,NA,NA,NA),
+                                                alpha = 1), nrow=2, order = 1)
+  ) +
+  scale_size_manual(name = 'Tree set',
+                    values = c(1.5,4),
+                    labels = c("Posterior trees","MCC tree"),
+                    guide = guide_legend(nrow=2)) +
+  scale_x_discrete(labels=c("All Mammals", pglsSet)) +
+  theme(legend.position ="top",
+        plot.margin = unit(c(0,0,0,0), "cm"),
+        legend.spacing.y = unit(0.1, 'cm'),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank()) +
+  labs(y = "PGLS estimates", x = "") + 
+  scale_y_continuous(limits = c(-1.8,0.65)) 
+```
+
+```{r, cache = FALSE, eval = TRUE}
+gl <- BMLMglobal %>% 
+  group_by(model, set) %>%
+  median_qi(b_logtipRate) %>%
+  rename(.value = b_logtipRate) %>%
+  mutate(.variable = 'All Mammals')
+
+cl <- BMLMglobal %>% 
+  group_by(.variable, model, set) %>%
+  median_qi(.value)
+BMLMglobalsum <- bind_rows(gl,cl)
+
+
+BMLMglobalsum1 <- BMLMglobalsum %>%
+  filter(.variable %in% 'All Mammals') %>%
+  select(-.width, -.point, -.interval, -.variable) %>%
+  mutate(colour = fct_relevel(case_when(set %in% 'treeMCC' ~ 'MCC',
+                                        TRUE ~ 'Posterior'),"Posterior","MCC")) %>%
+  pivot_wider(names_from = model, 
+              values_from = c(.value,.lower,.upper)) %>%
+  arrange(colour) 
+
+BMLMglobalsum2 <- BMLMglobalsum %>%
+  select(-.width, -.point, -.interval) %>%
+  mutate(colour = case_when(.variable %in% 'All Mammals' ~ 'All Mammals',
+                            TRUE ~ 'clades'),
+         size = case_when(set %in% 'treeMCC' ~ 'MCC',
+                          TRUE ~ 'Posterior'),
+         analysis = fct_relevel(model,"EstPiSyn", "SubPiSyn", "EstThetaSyn","SubThetaSyn"),
+         clade = ifelse(.variable %in% 'All Mammals', 'ALL', as.character(.variable))) %>%
+  arrange(analysis) 
+```
+
+```{r, fig.width = 9, fig.height = 6, cache = FALSE, eval = TRUE}
+AllSet <- c("All Mammals", pglsSet)
+bold.labels <- ifelse(AllSet %in% AllSet, "plain",
+                      "bold")
+
+pbmlm <- ggplot() +
+  geom_pointinterval(data = filter(BMLMglobalsum2, set %in% 'treeMCC'),
+                     aes(y = .value, x = clade, 
+                         ymin = .lower, ymax = .upper,
+                         color = analysis,
+                         group = analysis), 
+                     alpha = 0.8,
+                     point_alpha = 0.8,
+                     point_size = 4, size = 4,
+                     position = position_dodge(width = 0.85)) +
+  geom_pointinterval(data = filter(BMLMglobalsum2, !set %in% 'treeMCC'),
+                     aes(y = .value, x = clade, 
+                         ymin = .lower, ymax = .upper,
+                         group = analysis, 
+                         colour = analysis),
+                     alpha = 0.07, point_alpha = 0.1,
+                     point_size = 0.7, size = 0.7, 
+                     position = position_jitterdodge(jitter.width = 0.65, 
+                                                     dodge.width = 0.85)) +
+  geom_vline(xintercept = 1.5, size = 0.2, linetype = 'dashed') +
+  geom_hline(yintercept = 0, size = 0.2) +
+  scale_color_manual(name = 'Genetic diversity',
+                     values = c(col_v1[98],
+                                col_v1[70],
+                                col_v2[98],
+                                col_v2[70]),
+                     guide = "none") +
+  scale_x_discrete(labels=AllSet) +
+  theme_bw() +
+  theme(legend.position ="bottom",
+        plot.margin = unit(c(0,0,0,0), "cm"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 30, hjust = 1)) + 
+  labs(y = "BMLM estimates", x = "")  + 
+  scale_y_continuous(limits = c(-1.8,0.65))
+
+qs5 = ggpubr::ggarrange(ppgls, pbmlm, 
+                        ncol = 1, nrow = 2, 
+                        common.legend = T, 
+                        legend = 'bottom', align = "v", 
+                        heights = c(0.8,1))
+
+# showtext::showtext_auto(FALSE)
+# ggsave(paste0(fig_path, 'FigS5.pdf'), qs5, width = 9, height = 6, device = cairo_pdf)
+# ggsave(paste0(fig_path, 'FigS5.png'), qs5, width = 9, height = 6, device = png, type = 'cairo-png')
+# showtext::showtext_auto(TRUE)
+
+qs5
+```
+<div class = "figure">
+**Supplementary Figure 5:** Estimates from PGLS (top) and BMLM (bottom) analyses of the slope of the relationship between genetic diversity and speciation rates across all mammals (on the left) and each of the 14 clades with at least 20 species (on the right). Analyses were performed using either original estimates of $\theta_{Tsyn}$ and $\theta_{Wsyn}$ or mean estimates over 1000 subsampled replicates, and for the MCC tree as well as 100 posterior trees.
+</div>
+
+****
+
+##  Fig. S6. Relationship with different thresholds of sequences per species
+
+```{r, eval = TRUE}
+gendivSpRateN <- spRate %>% 
+  left_join(., select(gen.div, species, EstPiSyn, Nind), 
+            by = 'species') %>%
+  drop_na(EstPiSyn)
+
+DataSubsetMCC10 <- gendivSpRateN %>%
+  filter(set %in% 'treeMCC', Nind > 9) 
+
+Nspecies10 <- DataSubsetMCC10 %>%
+  group_by(clades) %>%
+  dplyr::summarise(NPisp10 = n())
+
+TreeSubset <- drop.tip(treeMCC, as.character(treeMCC$tip.label[which(!treeMCC$tip.label %in% DataSubsetMCC10$species)]))
+
+# modpi10 <- gls(log(EstPiSyn) ~ log(tipRate), 
+#                              data = DataSubsetMCC10,
+#                              correlation = corPagel(1, phy = TreeSubset, 
+#                                                     form =~species), 
+#                              method = "ML")
+# 
+# saveRDS(modpi10, paste0(folder_path,'7.pgls/extra/modpi10.rds'))
+modpi10 <- readRDS(paste0(folder_path,'7.pgls/extra/modpi10.rds'))
+# summary(modpi10) 
+
+#####
+
+DataSubsetMCC20 <- gendivSpRateN %>%
+  filter(set %in% 'treeMCC', Nind > 19) 
+
+Nspecies20 <- DataSubsetMCC20 %>%
+  group_by(clades) %>%
+  dplyr::summarise(NPisp20 = n())
+
+TreeSubset <- drop.tip(treeMCC, as.character(treeMCC$tip.label[which(!treeMCC$tip.label %in% DataSubsetMCC20$species)]))
+
+# 
+# modpi20 <- gls(log(EstPiSyn) ~ log(tipRate), 
+#                              data = DataSubsetMCC20,
+#                              correlation = corPagel(1, phy = TreeSubset, 
+#                                                     form =~species), 
+#                              method = "ML")
+# saveRDS(modpi20, paste0(folder_path,'7.pgls/extra/modpi20.rds'))
+modpi20 <- readRDS(paste0(folder_path,'7.pgls/extra/modpi20.rds'))
+# summary(modpi20) 
+
+#####
+
+DataSubsetMCC50 <- gendivSpRateN %>%
+  filter(set %in% 'treeMCC', Nind > 49) 
+
+Nspecies50 <- DataSubsetMCC50 %>%
+  group_by(clades) %>%
+  dplyr::summarise(NPisp50 = n())
+
+TreeSubset <- drop.tip(treeMCC, as.character(treeMCC$tip.label[which(!treeMCC$tip.label %in% DataSubsetMCC50$species)]))
+
+# modpi50 <- gls(log(EstPiSyn) ~ log(tipRate),
+#                              data = DataSubsetMCC50,
+#                              correlation = corPagel(1, phy = TreeSubset,
+#                                                     form =~species),
+#                              method = "ML")
+# saveRDS(modpi50, paste0(folder_path,'7.pgls/extra/modpi50.rds'))
+modpi50 <- readRDS(paste0(folder_path,'7.pgls/extra/modpi50.rds'))
+# summary(modpi50) 
+
+#####
+
+DataSubsetMCC75 <- gendivSpRateN %>%
+  filter(set %in% 'treeMCC', Nind > 74) 
+
+Nspecies75 <- DataSubsetMCC75 %>%
+  group_by(clades) %>%
+  dplyr::summarise(NPisp75 = n())
+
+TreeSubset <- drop.tip(treeMCC, as.character(treeMCC$tip.label[which(!treeMCC$tip.label %in% DataSubsetMCC75$species)]))
+
+# modpi75 <- gls(log(EstPiSyn) ~ log(tipRate),
+#                              data = DataSubsetMCC75,
+#                              correlation = corPagel(1, phy = TreeSubset,
+#                                                     form =~species),
+#                              method = "ML")
+# saveRDS(modpi75, paste0(folder_path,'7.pgls/extra/modpi75.rds'))
+modpi75 <- readRDS(paste0(folder_path,'7.pgls/extra/modpi75.rds'))
+# summary(modpi75) 
+
+#####
+
+DataSubsetMCC100 <- gendivSpRateN %>%
+  filter(set %in% 'treeMCC', Nind > 99) 
+
+Nspecies100 <- DataSubsetMCC100 %>%
+  group_by(clades) %>%
+  dplyr::summarise(NPisp100 = n())
+
+TreeSubset <- drop.tip(treeMCC, as.character(treeMCC$tip.label[which(!treeMCC$tip.label %in% DataSubsetMCC100$species)]))
+
+# modpi100 <- gls(log(EstPiSyn) ~ log(tipRate),
+#                              data = DataSubsetMCC100,
+#                              correlation = corPagel(1, phy = TreeSubset,
+#                                                     form =~species),
+#                              method = "ML")
+# saveRDS(modpi100, paste0(folder_path,'7.pgls/extra/modpi100.rds'))
+modpi100 <- readRDS(paste0(folder_path,'7.pgls/extra/modpi100.rds'))
+# summary(modpi100) 
+```
+
+```{r, eval = TRUE}
+Nspecies5 <- gendivSpRate %>%
+  filter(set %in% 'treeMCC') %>%
+  group_by(clades) %>%
+  dplyr::summarise(Nsp = n(),
+                   NPisp5 = sum(!is.na(EstPiSyn)))
+
+NspeciesSF <- left_join(Nspecies5,Nspecies10) %>%
+  left_join(Nspecies20) %>%
+  left_join(Nspecies50) %>%
+  left_join(Nspecies75) %>%
+  left_join(Nspecies100) %>%
+  pivot_longer(cols=-c(clades,Nsp)) %>%
+  mutate(SF = value/Nsp) %>%
+  filter(clades %in% unique(PGLSclade$clade))
+
+SFPlot <- ggplot(NspeciesSF, 
+                 aes(x = fct_inorder(str_replace(name, "NPisp","")),
+                     y = SF)) +
+  geom_boxplot() +
+  geom_point(aes(color = clades)) +
+  scale_colour_manual(values = tcol[2:15], 
+                      labels = pglsSet) +
+  theme_bw() +
+  labs(y = "Sampling fraction of available species\ngiven a threshold",
+       x = "Threshold for min. number of ind. per alignment") +
+  theme(legend.position = 'bottom')
+
+NspThres <- NspeciesSF %>%
+  dplyr::group_by(name) %>%
+  dplyr::summarize(Nsp = sum(value, na.rm = T)) %>%
+  rename(thres = name) 
+
+pglsSum0 <- bind_rows(data.frame(thres = 'NPisp10', t(coef(summary(modpi10))[2,c(1,4)]), 
+                                 Nsp = summary(modpi10)$dims$N),
+                      data.frame(thres = 'NPisp20', t(coef(summary(modpi20))[2,c(1,4)]),
+                                 Nsp = summary(modpi20)$dims$N),
+                      data.frame(thres = 'NPisp50', t(coef(summary(modpi50))[2,c(1,4)]),
+                                 Nsp = summary(modpi50)$dims$N),
+                      data.frame(thres = 'NPisp75', t(coef(summary(modpi75))[2,c(1,4)]),
+                                 Nsp = summary(modpi75)$dims$N),
+                      data.frame(thres = 'NPisp100', t(coef(summary(modpi100))[2,c(1,4)]),
+                                 Nsp = summary(modpi100)$dims$N)) %>%
+  rename(Estimate = 'Value',
+         pvalue = 'p.value')
+
+pglsSum <- PGLSglobalAll %>%
+  dplyr::filter(set %in% "treeMCC", 
+                analysis %in% "EstPiSyn", 
+                term %in% "tipRate") %>%
+  select(Estimate, pvalue, df) %>% 
+  mutate(thres = 'NPisp5') %>%
+  rename(Nsp = df) %>%
+  bind_rows(pglsSum0) 
+
+pglsThres <- ggplot(pglsSum, aes(x = Nsp, y = Estimate)) +
+  geom_point(aes(color = pvalue)) +
+  ggrepel::geom_label_repel(aes(label = str_replace(thres, "NPisp",""))) +
+  theme_bw()+
+  scale_x_continuous(breaks=pglsSum$Nsp) +
+  scale_color_gradient(name = "P-value", #trans = "log",
+                       breaks = c(1e-10, 0.05), 
+                       labels = c(1e-10, 0.05)) +
+  labs(x = "Number species in PGLS analysis for a given threshold", 
+       y = "PGLS slope estimate") +
+  theme(legend.position = 'bottom',
+        panel.grid.minor = element_blank()) 
+```
+
+```{r, fig.width = 14, fig.height = 4.5, eval = TRUE}
+gendivThres <- ggplot(data =  filter(gendivSpRate, set %in% 'treeMCC'), 
+                      aes(y = EstPiSyn, x = tipRate)) + 
+  geom_point(size = 2, alpha = 0.1) + 
+  scale_y_continuous(trans='log10',expand=c(0,0)) +
+  scale_x_continuous(trans='log10',expand=c(0,0)) +
+  stat_smooth(aes(color = '5'), method=lm, position = "identity", 
+              size=0.7, se = FALSE, geom = 'line',  fullrange = TRUE) + 
+  stat_smooth(data = DataSubsetMCC10, 
+              aes(y = EstPiSyn, x = tipRate, color = "10"), geom = 'line',
+              linetype = 'dashed',  show.legend=TRUE,
+              method=lm, se = FALSE, position = "identity", size=0.7, 
+              fullrange = TRUE) + 
+  stat_smooth(data = DataSubsetMCC20, 
+              aes(y = EstPiSyn, x = tipRate, color = "20"), geom = 'line',
+              linetype = 'dashed',  show.legend=TRUE,
+              method=lm, se = FALSE, position = "identity", size=0.7, 
+              fullrange = TRUE) + 
+  stat_smooth(data = DataSubsetMCC50, 
+              aes(y = EstPiSyn, x = tipRate, color = "50"), geom = 'line',
+              linetype = 'dashed',  show.legend=TRUE,
+              method=lm, se = FALSE, position = "identity", size=0.7, 
+              fullrange = TRUE) + 
+  stat_smooth(data = DataSubsetMCC75, 
+              aes(y = EstPiSyn, x = tipRate, color = "75"), geom = 'line',
+              linetype = 'dashed',  show.legend=TRUE,
+              method=lm, se = FALSE, position = "identity", size=0.7, 
+              fullrange = TRUE) + 
+  stat_smooth(data = DataSubsetMCC100, 
+              aes(y = EstPiSyn, x = tipRate, color = "100"), geom = 'line',
+              linetype = 'dashed',  show.legend=TRUE,
+              method=lm, se = FALSE, position = "identity", size=0.7, 
+              fullrange = TRUE) + 
+  theme_bw() + 
+  theme(legend.position = "bottom", 
+        legend.justification = "left") + 
+  labs(y = expression(paste(theta['Tsyn'])), 
+       x = bquote('Speciation rate '~(Myr^-1))) + 
+  scale_colour_manual(name="Threshold of number\nof individuals\nper alignment",
+                      values = c("5"="black","10"="lightskyblue",
+                                 "20"="olivedrab","50"="orange2",
+                                 "75"="red2","100"="purple"),
+                      breaks = c("5","10","20","50","75","100")) + 
+  guides(color = guide_legend(nrow = 3)) #, title.position = "left"
+
+qjoint <- gendivThres | SFPlot | pglsThres
+
+# showtext::showtext_auto(FALSE)
+# ggsave(paste0(fig_path, 'FigS6.pdf'), qjoint, width = 14, height = 4.5, device = cairo_pdf)
+# ggsave(paste0(fig_path, 'FigS6.png'), qjoint, width = 14, height = 4.5, device = png, type = 'cairo-png')
+# showtext::showtext_auto(TRUE)
+
+qjoint
+```
+<div class = "figure">
+**Supplementary Figure 6:** Analyses with different thresholds used for the minimum number of individual sequences per species. The slope of the OLS given six thresholds (A), with a continuous line for the threshold used in the main analyses (5 individuals); grey points for used species with speciation rates from MCC tree. The sampling fraction per clade for each threshold (B) was estimated relative to the total number of species in the DNA-only phylogeny. Relationship between PGLS slopes (MCC tree) and the number of species in the analysis (C) given the threshold of a number of sequences per species alignment.
+</div>
+
+****
+
+## Fig. S7. Accounting for samples geographic distances within species
+
+```{r}
+# Function to calculate pairwise distances for each species
+pairwise_distances <- function(data) {
+  coords <- as.matrix(data %>% select(x, y))
+  dist_matrix <- dist(coords, method = "euclidean")
+  distances <- as.vector(dist_matrix)
+  distances
+}
+
+# From 4.genetic_diversity/scripts/geneticDiversity_GeographicLocationChecks.R get genDiv_geo.txt to check these estimates of genetic diversity are consistent with estimates using geo referenced sequences
+
+gen.divG <- read_delim('4.genetic_diversity/outputs/GenDiv_geo.txt')  %>% 
+  left_join(filter(gendivSpRate, set %in% 'treeMCC')) %>% 
+  select(-subPiSyn_mean, -EstThetaSyn, -subThetaSyn_mean)
+
+SeqData <- read_delim(paste0(folder_path,'3.superCrunch_family/outputs/GenDiv_accessionIDsPerSpecies.txt')) %>% 
+  select(species, accession) %>% 
+  mutate(seq = word(accession, sep = fixed("."), 1)) %>% 
+  filter(species %in% gen.div$species) ### focus only on the sequences from the species that passed the quality filters
+
+theo2021Match <- read_csv(paste0(folder_path,
+                                 'otherData/Theodoridis2021/cytb_coordinates.csv')) %>% 
+  filter(seq %in% SeqData$seq) %>% 
+  arrange(species)
+
+theo2021Match2Loc <- theo2021Match %>%
+  group_by(species) %>%
+  filter(n_distinct(x, y) >= 2)
+
+# Get mean pairwise distances using all sequences we used and that geographic location could be found, even if the location is the same
+sumDist_allXY <- theo2021Match2Loc %>%
+  group_by(species) %>%
+  reframe(
+    nSp_all = n(),
+    avgdist_all = mean(pairwise_distances(pick(x, y))),
+    maxdist_all = max(pairwise_distances(pick(x, y))),
+    mindist_all = min(pairwise_distances(pick(x, y)))
+  )
+
+# Filter data to only include species with at least 2 distinct coordinates
+theo2021Match2LocUnique <- theo2021Match %>%
+  distinct(species, x, y) %>%
+  group_by(species) %>%
+  filter(n() >= 2)
+
+# Calculate pairwise distances and summarize
+sumDist_uniqueXY <- theo2021Match2LocUnique %>%
+  group_by(species) %>%
+  reframe(
+    nSp_unique = n(),
+    avgdist_unique = mean(pairwise_distances(pick(x, y))),
+    maxdist_unique = max(pairwise_distances(pick(x, y))), ## should be the same as max with all sequences
+    mindist_unique = min(pairwise_distances(pick(x, y)))
+  )
+
+summary_distances <- inner_join(sumDist_allXY, 
+                                sumDist_uniqueXY, by = "species") %>% 
+  inner_join(filter(gendivSpRate, set %in% 'treeMCC', !is.na(EstPiSyn))) %>% 
+  select(-branchRate, -set, -ord, -fam)
+```
+
+
+```{r, fig.height=10, fig.width=10}
+### 3 panels:
+## EstPiSyn vs EstPiSynG
+dtSet <- filter(gen.divG, EstPiSynG > 0, Nind > 4) %>% 
+  inner_join(select(summary_distances, species, avgdist_all))
+
+p1 <- ggplot(dtSet, 
+             aes(x = EstPiSynG, y = EstPiSyn)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  geom_text(data = data.frame(label = paste0(nrow(dtSet), " species"),
+                              x = max(dtSet$EstPiTotalG), y = min(dtSet$EstPiSyn)),
+            aes(label = label, x = x, y = y),
+            hjust = 1.5, vjust = 0.5) +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs( x = expression(paste(theta["Tsyn"], ' with only geo referrenced sequences')), 
+        y = expression(paste(theta["Tsyn"], ' with all sequences'))) +
+  theme_bw()
+
+
+## EstPiSynG vs Pairwise geographic distance with all sequences
+TreeSubset4 <- drop.tip(treeMCC, as.character(treeMCC$tip.label[which(!treeMCC$tip.label %in% dtSet$species)]))
+mod12 <- gls(log(EstPiSynG) ~ log(avgdist_all),
+                             data = dtSet,
+                             correlation = corPagel(1, phy = TreeSubset4,
+                                                    form =~species),
+                             method = "ML")
+
+
+p2 <- ggplot(dtSet, 
+             aes(y = EstPiSynG, x = avgdist_all)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  geom_text(data = data.frame(label = paste0('MCC PGLS estimate: ', round(coef(summary(mod12))[2,1],3), 
+                                             '\nMCC PGLS p-value: ',ifelse(coef(summary(mod12))[2,4] < 0.0001, 
+                                                                           '< 0.0001', round(coef(summary(mod12))[2,4],3))),
+                              x = 0.004, y = 0.00025),
+            aes(label = label,
+                x = x, y = y,
+                hjust = 0)) +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs( y = expression(paste(theta["Tsyn"], ' with only geo referrenced sequences')), 
+        x = 'Mean pairwise geographic distances') +
+  theme_bw()
+
+## EstPiSynG vs Tip speciation rate - show MCC estimates for this and for EstPiSynG vs Tip speciation rate + Pairwise geographic distance with all sequences
+
+mod13 <- gls(log(EstPiSynG) ~ log(tipRate),
+                             data = dtSet,
+                             correlation = corPagel(1, phy = TreeSubset4,
+                                                    form =~species),
+                             method = "ML")
+
+p3 <- ggplot(dtSet, 
+             aes(y = EstPiSynG, x = tipRate)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  geom_text(data = data.frame(label = paste0('MCC PGLS estimate: ', round(coef(summary(mod13))[2,1],3), 
+                                             '\nMCC PGLS p-value: ', ifelse(coef(summary(mod13))[2,4] < 0.0001, 
+                                                                            '< 0.0001', 
+                                                                            format(round(coef(summary(mod13))[2,4],4), 
+                                                                                   scientific = FALSE))),
+                              x = 0.05, y = 0.00025),
+            aes(label = label, x = x, y = y, hjust = 0)) +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs( y = expression(paste(theta["Tsyn"], ' with only geo referrenced sequences')), 
+        x = bquote("MCC tree speciation rates " ~ (Myr^-1))) +
+  theme_bw()
+
+
+mod14 <- gls(log(EstPiSynG) ~ log(tipRate) + log(avgdist_all),
+                             data = dtSet,
+                             correlation = corPagel(1, phy = TreeSubset4,
+                                                    form =~species),
+                             method = "ML")
+
+table_data <- tibble(
+  "Terms (logged)" = c('Speciation rate','Mean pairwise geographic distances'),
+  "Estimate" = round(coef(summary(mod14))[2:3, 1],3),
+  "P-value" = ifelse(coef(summary(mod14))[2:3, 3] < 0.0001, '< 0.0001',
+                     format(round(coef(summary(mod14))[2:3, 4],4), scientific = FALSE))
+)
+
+
+
+# Convert the flextable to a ggplot object
+ft <- autofit(flextable(table_data)) %>%
+  add_header_row(
+   values = as_paragraph("PGLS model with MCC tree: ","\U03B8", as_sub("TsynGeo"), " ~ ",
+                                "\u03BB", " + mean pairwise geographic distances"),
+  colwidths = 3)  %>%
+  flextable::font(part = "all", fontname = "arial") %>% 
+  flextable::fontsize(size = 11, part = "all") 
+
+ft_grob <- gen_grob(ft, fit = "width")
+ft_grob_with_margin <- grid::grobTree(ft_grob, 
+                                      vp = grid::viewport(width = 0.9, 
+                                                          height = 0.9, x = 0.5, y = 0.5))
+
+p1p2p3 <- wrap_plots(p1, p2, p3, ft_grob_with_margin)
+
+# showtext::showtext_auto(FALSE)
+# ggsave(paste0(fig_path, 'FigS7.pdf'), p1p2p3, width = 10, height = 10, device = cairo_pdf)
+# ggsave(paste0(fig_path, 'FigS7.png'), p1p2p3, width = 10, height = 10, device = png, type = 'cairo-png')
+# showtext::showtext_auto(TRUE)
+
+p1p2p3
+```
+<div class = "figure">
+**Supplementary Figure 7:** Analyses with georeferenced sequences. 454 species had at least five georeferenced sequences coming from at least two different locations. (A) Relationship between $\theta_{Tsyn}$ measured using all sequences and $\theta_{Tsyn}$ using only georeferenced sequences ($\theta_{TsynGeo}$); between $\theta_{TsynGeo}$ and the mean within-species geographic distance between georeferenced sequences (B); and the relationship between $\theta_{TsynGeo}$ and speciation rates from MCC tree (C) as well as the PGLS results for the model accounting for mean geographic distance (D). The MCC tree PGLS estimate and p-values are shown also in (B) and (C). Genetic diversity increases with mean geographic distance (B). This can either reflect biology (i.e., species with wider ranges / population sizes have higher genetic diversity) or a potential sampling artifact (we measure more of species-wide genetic diversity when species are more thoroughly sampled across their range). Our subsampling analyses suggest that the latter does not occur (genetic diversity estimated with 5 sequences is usually close to genetic diversity estimated with all sequences, see Supplementary Fig. 1). In any case, the negative association between genetic diversity and speciation rates (C) holds when accounting for mean geographic distance (D), suggesting that whatever causes a positive correlation between mean geographic distance and genetic diversity does not explain the negative association between genetic diversity and speciation rates.
+</div>
+
+*****
+
+## Fig. S8. Per trait PGLS
+
+```{r, eval = TRUE, fig.height = 10, fig.width = 15}
+extract_strings_in_parentheses <- function(text) {
+  matches <- str_match_all(text, "\\((.*?)\\)")[[1]]
+  if (is.null(matches))
+    return(NA_character_)
+  
+  extracted_strings <- matches[, 2]
+  return(paste(extracted_strings, collapse = " + "))
+}
+
+pglsExtra <- readRDS(paste0(folder_path,'7.pgls/outputs/extraTraits_modelOutputs.rds')) %>% 
+  mutate(modelR = sapply(word(modelF, sep = " ~ ",1,1), extract_strings_in_parentheses),
+         modelP = sapply(word(modelF, sep = " ~ ",2,2), extract_strings_in_parentheses))
+
+pglsExtra1W <- pglsExtra %>% 
+  filter(!grepl("\\+", modelP), ! modelP %in% "", !modelP %in% "geoArea_km2") %>% 
+  mutate(Estimate = map_dbl(output, ~ .x[[2, 1]]),
+         pvalue = map_dbl(output, ~ .x[[2, 4]]),
+         pvalueBin = ifelse(pvalue < 0.05, 'Signif.','Not signif.'),
+         Term = dplyr::recode_factor(modelP,
+                                     latitude_mean = "Latitudinal midpoint",
+                                     mean_temp = "Mean temperature",
+                                     BodyMassKg_notInputed = "Body Mass",
+                                     #geoArea_km2 = "Range area",                       
+                                     GenerationLength_d = "Generation length", 
+                                     litter_or_clutch_size_n = "Litter size",
+                                     .ordered = TRUE),
+         analysis = case_when(modelR %in% 'EstPiSyn' ~ as.character(expression(paste(theta["Tsyn"]," ~ Trait"))),
+                              modelR %in% 'tipRate' ~ as.character(expression(paste(lambda," ~ Trait")))),
+         treeType = case_when(set %in% 'treeMCC' ~ "MCC tree",
+                              TRUE ~ "Posterior trees")) %>%
+  select(analysis, treeType, Estimate, Term, pvalue, pvalueBin) 
+
+pglsExtra2W <- pglsExtra %>% 
+  filter(grepl("\\+", modelP), ! modelP %in% "", !modelP %in% "tipRate + geoArea_km2") %>% 
+  mutate(Estimate_tipRate = map_dbl(output, ~ .x[[2, 1]]),
+         pvalue_tipRate = map_dbl(output, ~ .x[[2, 4]]),
+         Estimate_trait = map_dbl(output, ~ .x[[3, 1]]),
+         pvalue_trait = map_dbl(output, ~ .x[[3, 4]]),
+         analysis = dplyr::recode_factor(word(modelP, sep = fixed(" + "),2,2),
+                                         latitude_mean = "Latitudinal midpoint",
+                                         mean_temp = "Mean temperature",
+                                         BodyMassKg_notInputed = "Body Mass",
+                                         #geoArea_km2 = "Range area",                       
+                                         GenerationLength_d = "Generation length", 
+                                         litter_or_clutch_size_n = "Litter size",
+                                         .ordered = TRUE)) %>% 
+  pivot_longer(cols = starts_with(c("Estimate_", "pvalue_")),
+               names_to = c(".value", "predType"),
+               names_sep = "_") %>% 
+  mutate(Term = case_when(predType %in% "trait" ~ analysis,
+                          predType %in% "tipRate" ~ !! "\u03BB"),
+         analysis0 = as.character(expression(paste(theta["Tsyn"]," ~ ", lambda," + Trait"))),
+         treeType = case_when(set %in% 'treeMCC' ~ "MCC tree",
+                              TRUE ~ "Posterior trees"),
+         pvalueBin = ifelse(pvalue < 0.05, 'Signif.','Not signif.')) %>% 
+  select(analysis, analysis0, treeType, predType, Term, Estimate, pvalueBin) 
+
+pp1 <- ggplot(data = pglsExtra1W,
+              aes(x = Estimate, 
+                  y =  fct_rev(fct_inorder(Term)), 
+                  color = pvalueBin)) +
+  geom_vline(aes(xintercept = 0), linetype= 2) +
+  geom_point(data = subset(pglsExtra1W, treeType == "Posterior trees"),
+             position = position_identity(), 
+             alpha = 0.2, size = 2,  show.legend = F, shape = 16) +
+  geom_point(data = subset(pglsExtra1W, treeType == "MCC tree"), 
+             position = position_nudge(y = -0.1), 
+             alpha = 1, size = 2,  show.legend = F, shape = 17) +
+  facet_grid(Term~fct_rev(analysis), drop = T, scales = 'free_y', 
+             labeller = labeller(.cols = label_parsed, .rows = label_value), switch="y") + 
+  theme_bw() + labs(x = "Slope Estimate") +
+  scale_colour_manual(values=c('gray80','red')) + 
+  theme(axis.title.y=element_blank(), 
+        #axis.title.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank(), 
+        strip.background = element_rect(fill = NA),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        text = element_text(size=15)) 
+
+pp2 <- ggplot(data = pglsExtra2W,
+              aes(x = Estimate, 
+                  y =  Term, 
+                  color = pvalueBin)) +
+  geom_vline(aes(xintercept = 0), linetype= 2) +
+  geom_point(data = subset(pglsExtra2W, treeType == "Posterior trees"),
+             position = position_identity(), 
+             alpha = 0.2, size = 2,  show.legend = F, shape = 16) +
+  geom_point(data = subset(pglsExtra2W, treeType == "MCC tree"), 
+             position = position_nudge(y = -0.15), 
+             alpha = 1, size = 2,  show.legend = F, shape = 17) +
+  facet_grid(analysis~fct_rev(analysis0), drop = T, scales = 'free_y', 
+             labeller = labeller(.cols = label_parsed, .rows =label_value)) + 
+  theme_bw() +  labs(x = "Slope Estimate") +
+  scale_colour_manual(values=c('red','gray80')) +
+  scale_y_discrete(position = "right") + 
+  theme(axis.title.y=element_blank(), #axis.title.x=element_blank(),
+        #axis.text.y=element_blank(), #axis.ticks.x=element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        text = element_text(size=15),
+        strip.text.y = element_blank(),
+        strip.background.x = element_rect(fill = NA),
+        strip.background.y = element_blank()) 
+
+
+fS8 <- pp1 + pp2 +
+  plot_layout(ncol = 2, widths = c(2, 1.1))
+
+# showtext::showtext_auto(FALSE)
+# ggsave(paste0(fig_path, 'FigS8.pdf'), fS8, width=15, height=10, device = cairo_pdf)
+# ggsave(paste0(fig_path, 'FigS8.png'), fS8, width=15, height=10, device = png, type = 'cairo-png')
+# showtext_auto(TRUE)
+
+fS8
+```
+<div class = "figure">
+**Supplementary Figure 8:** PGLS results for models evaluating the relationships between five species-specific covariates, considered one-by-one, and genetic diversity (left panels) and speciation rate (middle panels). The right panels report results for a model evaluating the relationship between genetic diversity and speciation rate when accounting for each covariate. The points represent the slopes estimated from analyses conducted on each of the 100 posterior trees while triangles refer to the MCC estimate. Analyses are coloured in red when significant (p-value < 0.05).
+</div>
+
+*****
+
+## Fig. S9. Combined traits results from posterior trees dataset
+
+```{r, fig.height = 8, fig.width = 10, eval = TRUE}
+pglsResulttraits <- PGLSglobalAll %>% 
+  filter(analysisType %in% 'global_traits',
+         !term %in% 'Intercept')  %>%
+  mutate(pvalueBin = ifelse(pvalue < 0.05, 'Signif.','Not signif.'),
+         Term = dplyr::recode_factor(term, tipRate = !! "\u03BB", 
+                                     latitude_mean = "Latitudinal midpoint",
+                                     mean_temp = "Mean temperature",
+                                     #geoArea = "Range area",
+                                     BodyMassKg_notInputed = "Body Mass",
+                                     GenerationLength_d = "Generation length",
+                                     litter_or_clutch_size_n = "Litter size",
+                                     .ordered = TRUE)) %>%
+  select(analysis, set, Estimate, Term, pvalue, pvalueBin) 
+
+pglsResulttraits$analysis <- factor(pglsResulttraits$analysis, 
+                                    levels = c("piTraits",
+                                               "SpRateTraits",
+                                               "piSpRateTraits"),
+                                    labels = c(expression(paste(theta["T"]," ~ Traits")),
+                                               expression(paste(lambda, " ~ Traits")),
+                                               expression(paste(theta["T"],' ~ ', lambda, " + Traits"))))
+
+
+
+pp1 <- ggplot(data = filter(pglsResulttraits, !set %in% 'treeMCC', 
+                            analysis %in% 'paste(theta["T"], " ~ ", lambda, " + Traits")')) +
+  geom_vline(aes(xintercept = 0), linetype= 2) +
+  geom_point(aes(x = Estimate, y =  fct_rev(Term), color = pvalueBin), 
+             alpha = 0.2, size = 2,  show.legend = F) +
+  facet_wrap(~analysis, ncol = 1, drop = T, scales = 'free_y', labeller = label_parsed) + 
+  theme_bw() + labs(x = "Slope Estimate") +
+  xlim(-0.33, 0.23)  + 
+  scale_colour_manual(values=c('gray80','red')) + 
+  theme(axis.title.y=element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+                    strip.background = element_rect(fill = NA),
+        text = element_text(size=15)) 
+
+pp2 <- ggplot(data = droplevels(filter(pglsResulttraits, !set %in% 'treeMCC', 
+                                       !analysis %in% 'paste(theta["T"], " ~ ", lambda, " + Traits")'))) +
+  geom_vline(aes(xintercept = 0), linetype= 2) +
+  geom_point(aes(x = Estimate, y =  fct_rev(Term), color = pvalueBin), 
+             alpha = 0.2, size = 2, show.legend = F) +
+  facet_wrap(~analysis, ncol = 1, drop = T, scales = 'free', labeller = label_parsed) +
+  theme_bw() + 
+  xlim(-0.33, 0.23)  + 
+  labs(title = 'PGLS') +
+  scale_colour_manual(values=c('gray80','red')) + 
+  theme(axis.title.y=element_blank(),  axis.title.x=element_blank(),
+        axis.text.x=element_blank(), axis.ticks.x=element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+                    strip.background = element_rect(fill = NA),
+        text = element_text(size=15)) 
+
+BMLMglobal_traitsExtPos <- BMLMglobal_traitsExt %>%
+  mutate(Term = dplyr::recode(term, b_logtipRate = "Speciation rate", 
+                              b_loglatitude_mean = "Latitudinal midpoint",
+                              b_logmean_temp = "Mean temperature",
+                              # b_loggeoArea_km2 = "Range area",
+                              b_logBodyMassKg_notInputed = "Body Mass",
+                              b_logGenerationLength_d = "Generation length", 
+                              b_loglitter_or_clutch_size_n = "Litter size"),
+         ana = 'BMLM')
+
+BMLMglobal_traitsExtPos$Term <- factor(BMLMglobal_traitsExtPos$Term,
+                                       levels = c("Speciation rate", "Latitudinal midpoint","Mean temperature", 
+                                                  # "Range area",
+                                                  "Body Mass", "Generation length", "Litter size"))
+
+BMLMglobal_traitsExtPos$analysis <- factor(BMLMglobal_traitsExtPos$analysis, 
+                                           levels = c("piTraits",
+                                                      "SpRateTraits",
+                                                      "piSpRateTraits"),
+                                           labels = c(expression(paste(theta["T"]," ~ Traits")),
+                                                      expression(paste(lambda, " ~ Traits")),
+                                                      expression(paste(theta["T"],' ~ ', lambda, " + Traits"))))
+
+b1 <-  ggplot(data = filter(BMLMglobal_traitsExtPos, !set %in% 'treeMCC',
+                            analysis %in% 'paste(theta["T"], " ~ ", lambda, " + Traits")')) +
+  geom_vline(aes(xintercept = 0), linetype= 2) +
+  stat_halfeye(aes(x = Estimate, y =  fct_rev(Term)),
+               point_interval = median_qi, .width = .95, scale = 1, #size = 4,
+               #position = position_nudge(y = 0.1), 
+               alpha = 0.8) +
+  facet_wrap(~analysis, ncol = 1, drop = T, scales = 'free_y', labeller = label_parsed) +
+  labs(x = "Slope Estimate") +
+  theme_bw() + 
+  xlim(-0.911, 0.64)  + 
+  theme(
+    axis.title.y=element_blank(),
+    axis.text.y=element_blank(), axis.ticks.y=element_blank(), 
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+            strip.background = element_rect(fill = NA),
+    text = element_text(size=15)) 
+
+b2 <- ggplot(data = droplevels(filter(BMLMglobal_traitsExtPos, !set %in% 'treeMCC',
+                                      !analysis %in% 'paste(theta["T"], " ~ ", lambda, " + Traits")'))) +
+  geom_vline(aes(xintercept = 0), linetype= 2) +
+  stat_halfeye(aes(x = Estimate, y =  fct_rev(Term)), 
+               point_interval = median_qi, .width = .95, scale = 1, #size = 4, 
+               #position = position_nudge(y = 0.1), 
+               alpha = 0.8) +
+  facet_wrap(~analysis, ncol = 1, drop = T, scales = 'free_y', labeller = label_parsed ) +
+  labs(title = 'BMLM') +
+  theme_bw() + 
+  xlim(-0.911, 0.64)  + 
+  theme(axis.title=element_blank(), 
+        #axis.title.y=element_blank(),
+        axis.text=element_blank(), axis.ticks=element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        strip.background = element_rect(fill = NA),
+        text = element_text(size=15)) 
+
+p <- pp2 + pp1 +
+  plot_layout(nrow = 2, heights = c(1.7, 1))
+
+bb <- b2 + b1 +
+  plot_layout(nrow = 2, heights = c(1.7, 1))
+
+q9 <- p / bb +
+  plot_layout(ncol = 2, widths = c(1, 1))
+
+# showtext::showtext_auto(FALSE)
+# ggsave(paste0(fig_path, 'FigS9.pdf'), q9, width = 10, height = 8, device = cairo_pdf)
+# ggsave(paste0(fig_path, 'FigS9.png'), q9, width = 10, height = 8, device = png, type = 'cairo-png')
+# showtext::showtext_auto(TRUE)
+
+q9
+```
+<div class = "figure">
+**Supplementary Figure 9:** Results for models evaluating the relationships between five species-specific covariates, considered simultaneously in a single combined analysis, and genetic diversity (top panels), speciation rate (middle panels). The bottom panels report results for a model evaluating the relationship between genetic diversity and speciation rate when accounting for the covariates. Analyses using the posterior dataset with PGLS estimates colored red when significant (p-value < 0.05) and BMLM results plotted with median and 95% confidence intervals from samples drawn from all posterior dataset analyses.
+</div>
+
+****
+
+## Fig. S10. Synonymous vs Non-Synonymous
+
+```{r, fig.height = 4, fig.width = 12, eval = TRUE}
+# plot syn vs nonsyn boxplot 
+gendivSpRateSynNon0 <- gen.div %>% 
+  filter(EstPiNonSyn > 0) %>% 
+  mutate(w = nonSynSites/synSites, dnds = EstPiNonSyn/EstPiSyn) %>% 
+  full_join(filter(gendivSpRateMutRate, set %in% 'treeMCC')) 
+
+
+gendivSpRateSynNon <- gendivSpRateSynNon0 %>%
+  select(species, EstPiSyn, EstPiNonSyn,tipRate) %>% 
+  pivot_longer(cols = c(EstPiSyn, EstPiNonSyn), 
+               names_to = "genDiv", values_to = "genDivStat")
+
+
+p1 <- ggplot(gendivSpRateSynNon, aes(x = fct_rev(genDiv), y = genDivStat, color = fct_rev(genDiv))) +
+  geom_boxplot(outlier.shape = NA, show.legend = FALSE) + 
+  geom_point(alpha = 0.2,size = 0.5,position = position_jitter(width = 0.35), show.legend = FALSE) +
+  scale_y_log10(name = expression(paste("Genetic diversity (",
+                                        theta["T"], ")"))) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  scale_x_discrete(name= "", labels = c("Synonymous","Non-synonymous")) +
+  scale_color_iwanthue()
+
+
+# plot theta's vs speciation rate (MCC)
+
+p2 <- ggplot(gendivSpRateSynNon, aes(color = fct_rev(genDiv), x = tipRate, y = genDivStat)) +
+  geom_point(size = 0.7, show.legend = FALSE) +
+  geom_smooth(method = 'lm', show.legend = FALSE) +
+  labs(y = expression(paste("Genetic diversity (",
+                            theta["T"], ")")), 
+       x = bquote("MCC tree speciation rates " ~ (Myr^-1))) +
+  scale_y_log10() + scale_x_log10() +
+  scale_color_iwanthue() +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) 
+
+# plot theta's vs speciation rate slope estimates with p-values
+
+PGLSSynNon <- PGLSglobalAll %>%
+  filter(analysis %in% c('EstPiSyn','EstPiNonSyn'),
+         term %in% 'tipRate') 
+
+p3 <- ggplot(filter(PGLSSynNon, !set %in% 'treeMCC'), 
+             aes(x = Estimate, color = fct_rev(analysis))) +
+  geom_density( trim = TRUE, show.legend = FALSE) +
+  geom_vline(data = filter(PGLSSynNon, set %in% 'treeMCC'),
+             aes(xintercept = Estimate, color = analysis),
+             linetype = 'dashed', show.legend = FALSE) +
+  scale_color_iwanthue() +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())  + 
+  labs(x = 'Slope estimates', y = 'Density') +
+  geom_text(aes(x = -0.42, y = 0.5), hjust = 0, color = 'black',
+            label = "MCC tree\nestimates", 
+            size = 3,
+            show.legend = FALSE)
+
+
+p10 <- (p1 | p2 | p3) + 
+  plot_annotation(tag_levels = 'A')
+
+# showtext::showtext_auto(FALSE)
+# ggsave(paste0(fig_path, 'FigS10.pdf'), p10, width = 12, height = 4, device = cairo_pdf)
+# ggsave(paste0(fig_path, 'FigS10.png'), p10, width = 12, height = 4, device = png, type = 'cairo-png')
+# showtext::showtext_auto(TRUE)
+
+p10
+```
+<div class = "figure">
+**Supplementary Figure 10:** Comparison between genetic diversity computed from synonymous and nonsynonymous sites. (A) synonymous genetic diversity is overall higher than non-synonymous genetic diversity, as expected. (B) PGLS correlations between genetic diversity and speciation rates are negative for both synonymous and non-synonymous genetic diversity. (C) The negative relationship between genetic diversity and speciation rates is steeper for synonymous than non-synonymous sites.
+</div>
+
+
+****
+
+## Fig. S11. Genetic diversity with Mutation rate and Ne
+
+```{r, fig.height = 5, fig.width = 9, eval = TRUE}
+dtset <- gendivSpRateMutRate %>%
+  filter(set %in% 'treeMCC') %>% 
+  select(species, EstPiSyn, Ne_y, mutRate_y) %>% 
+  drop_na()
+
+TreeSubset <- drop.tip(treeMCC, as.character(treeMCC$tip.label[which(!treeMCC$tip.label %in% dtset$species)]))
+
+# modPiNey <- gls(log(EstPiSyn) ~ log(Ne_y),
+#                              data = dtset,
+#                              correlation = corPagel(1, phy = TreeSubset,
+#                                                     form =~species),
+#                              method = "REML")
+# 
+# saveRDS(modPiNey, paste0(folder_path,'7.pgls/extra/modPiNey.rds'))
+modPiNey <- readRDS(paste0(folder_path,'7.pgls/extra/modPiNey.rds'))
+
+# modPimutRate_y <- gls(log(EstPiSyn) ~ log(mutRate_y),
+#                              data = dtset,
+#                              correlation = corPagel(1, phy = TreeSubset,
+#                                                     form =~species),
+#                              method = "REML")
+# 
+# saveRDS(modPimutRate_y, paste0(folder_path,'7.pgls/extra/modPimutRate_y.rds'))
+modPimutRate_y <- readRDS(paste0(folder_path,'7.pgls/extra/modPimutRate_y.rds'))
+
+pinemupgls <- data.frame(variable = factor(c('Ne','MutRate'), 
+                                           levels = c('Ne','MutRate'),
+                                           labels = c(expression(paste(N["e"])), 
+                                                      expression(paste("Mutation Rate - ", mu, ' (per year)'))
+                                                      )),
+                         PGLS_estimate = paste('MCC PGLS estimate:',
+                                               c(round(coef(summary(modPiNey))[2,1],3),
+                                                 round(coef(summary(modPimutRate_y))[2,1],3))),
+                         PGLS_value = paste('MCC PGLS p-value:',
+                                            c('< 0.0001',#round(coef(summary(modPiNey))[2,4],3), 
+                                              round(coef(summary(modPimutRate_y))[2,4],3))),
+                         x = c(54115, 5.6e-10)
+)
+
+## pi vs mutation rate & Ne
+p11 = ggplot(mgendivSpRateMutRate, aes(y = EstPiSyn, x = mean)) +
+  geom_errorbar(aes(xmin = lower.ci, xmax = upper.ci), color = "gray70") +
+  geom_point(size = 0.9, color = "gray50") +
+  stat_smooth(method = lm, color = 'black', se = F, fullrange = T) + 
+  scale_x_log10(labels = trans_format("log10", math_format(10^.x))) + 
+  scale_y_log10(breaks = c(0.001,0.01,0.1),
+                labels = c(0.001,0.01,0.1),
+                limits = c(0.00017, 0.15)) + 
+  geom_text(data = pinemupgls, aes(label = PGLS_estimate, 
+                                   x = x, y = min(mgendivSpRateMutRate$EstPiSyn)+0.00015),
+            hjust = 0) +
+  geom_text(data = pinemupgls, aes(label = PGLS_value, 
+                                   x = x, y = min(mgendivSpRateMutRate$EstPiSyn)+0.0001),
+            hjust = 0) +
+  facet_wrap(~variable,  labeller = label_parsed,
+             scales = 'free_x', strip.position = "bottom" ) +
+  theme_bw() + labs(y = expression(paste('Genetic diversity - ', theta["Tsyn"]))) +
+  theme(axis.title.x=element_blank(), 
+        axis.title.y=element_text(size = 14), 
+        strip.text = element_text(size = 14), 
+        strip.placement = "outside", 
+        strip.background.x = element_blank(), 
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())    
+
+# showtext::showtext_auto(FALSE)
+# ggsave(paste0(fig_path, 'FigS11.pdf'), p11, width = 9, height = 5, device = cairo_pdf)
+# ggsave(paste0(fig_path, 'FigS11.png'), p11, width = 9, height = 5, device = png, type = 'cairo-png')
+# showtext::showtext_auto(TRUE)
+
+p11 + 
+  plot_annotation(tag_levels = 'A')
+```
+<div class = "figure">
+**Supplementary Figure 11:** Relationships between genetic diversity ($\theta_{Tsyn}$) and the theoretical components of $\theta$: effective population size ($N_e$) and mutation rate ($\mu$). Units are as explained in the Methods and caption of Fig.4. Plots with means ($N_e$) and ($\mu$) and 95% confidence intervals with a regression line and log scaled axis; MCC tree PGLS estimates and p-values are shown.
+
+</div>
+
+****  
+
+## Fig. S12. Comparison between mtDNA and nuDNA datasets
+
+### Get proportion of heterozygous sites from Upham et al. 2019 loci
+
+Extract all base frequencies to identify heterozygous site positions (any with ambiguous codes) from 31-gene set from Upham et al. 2019 phylogeny paper which have 27 nuclear loci for which some might have heterozygous sites. 
+
+```{r, eval = FALSE}
+###https://datadryad.org/stash/dataset/doi:10.5061/dryad.tb03d03
+## prepare data from Nathan's alignments
+library(phylotools)
+
+newpath <- paste0(folder_path,'otherData/Upham2019/')
+uphampath <- paste0(newpath, 'Upham_31genes/')
+files <- list.files(uphampath, pattern = 'phy',  full.names = TRUE)
+
+
+## read phylip files and convert them to fasta for easier manipulation
+for (i in files){
+  phyd <- phylotools::read.phylip(i)
+  
+  phylotools::dat2fasta(phyd,
+                        outfile = paste0(newpath, tools::file_path_sans_ext(basename(i)),".fasta"))
+}
+
+
+files2 <- list.files(newpath, pattern = 'fasta',  full.names = TRUE)
+
+freqs <- data.frame()
+for (i in files2){
+  
+  dna <- read.dna(i, format="fasta", as.character = F)
+  
+  locus = word(tools::file_path_sans_ext(basename(i)),-1, sep = "_")
+  
+  sp <- data.frame(name = rownames(dna)) %>% 
+    separate(name, into = c('species',"x1","x2","x3","x4","seqID","x5"), sep = "__", fill = "left") %>%
+    select(species, seqID) %>%
+    drop_na() ##exclude outgroup
+  
+  for (j in 1:nrow(sp)){
+    freqs <- bind_rows(freqs, data.frame(locus = locus, 
+                                         species = sp$species[j],
+                                         seqID = sp$seqID[j],
+                                         t(base.freq(dna[j,], all = TRUE, freq = TRUE))))
+  }
+}
+
+allfreqs <- freqs %>%
+  select(-X..1) %>%
+  rename(gaps = "X.") %>%
+  rowwise() %>%
+  dplyr::mutate(unbiasSize = sum(c_across(a:b)),
+                heteroSize = sum(c_across(r:b)),
+                markerType = case_when(locus %in% c("COI","CYTB","ND1","ND2") ~ "mtDNA",
+                                       TRUE ~ "nuclear"))
+write.table(allfreqs, paste0(newpath,"analyses/31genes_nucFrequencies.txt"), sep = "\t", col.names = TRUE, row.names = FALSE, quote = FALSE)
+```
+
+
+```{r, fig.height = 7, fig.width=15}
+newpath <- paste0(folder_path,'otherData/Upham2019/')
+uphampath <- paste0(newpath, 'Upham_31genes/')
+allfreqs <- read.delim(paste0(newpath,"analyses/31genes_nucFrequencies.txt"), header = TRUE, sep = "\t")
+
+fig0 <- allfreqs %>% 
+  filter(markerType %in% 'nuclear') %>%
+  mutate(heteroCat = case_when(heteroSize == 0 ~ "noHeteroSites",
+                               TRUE ~ "heteroSites")) 
+
+figUphamHet <- fig0 %>%
+  ggplot(aes(x = fct_infreq(locus), fill = heteroCat)) + 
+  geom_bar()+
+  theme_bw() +
+  hues::scale_fill_iwanthue(name = "Type of sequence (ignoring N as ambiguous):", labels = c("With at least 1 site with ambiguous nucleotides", "Without ambiguous nucleotides")) +
+  labs(x = "Nuclear loci", y = "Counts of species", title = NULL) +
+  # geom_text(aes(label=after_stat(count)), stat="count", position=position_stack(0.5)) +
+  theme(legend.position = 'bottom',
+        axis.text = element_text(size = 7))
+
+
+fig1 <- allfreqs %>% 
+  mutate(heteroCat = case_when(heteroSize == 0 ~ "noHeteroSites",
+                               TRUE ~ "heteroSites")) %>% 
+  select(species, markerType, heteroCat) %>% 
+  count(markerType,heteroCat) %>% 
+  group_by(markerType) %>%
+  mutate(total = sum(n)) %>%
+  ungroup() %>%
+  mutate(percentage = n / total * 100) %>% 
+  ggplot(aes(x = markerType, y = percentage, fill = heteroCat)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  ylab("Percentage of sequences") +
+  xlab("Loci type") +
+  hues::scale_fill_iwanthue(name = "Type of sequence (ignoring N as ambiguous):",
+                            labels = c("With at least 1 site with ambiguous nucleotides",                                                                                  "Without ambiguous nucleotides")) +
+  theme_bw() +
+  theme(legend.position = 'bottom')
+
+fig2 <- (figUphamHet + fig1) + plot_layout(guides = 'collect', widths = c(0.7, 0.3)) &
+  theme(legend.position = 'bottom')
+
+showtext::showtext_auto(FALSE)
+ggsave(paste0(fig_path,"other/31genes_speciesSitesHet.pdf"), fig2,  
+       width = 15, height = 7, device = cairo_pdf)
+ggsave(paste0(fig_path,"other/31genes_speciesSitesHet.png"), fig2,  
+       width = 15, height = 7, device = png, type = 'cairo-png')
+showtext::showtext_auto(TRUE)
+fig2
+```
+
+
+```{r, fig.width=12, fig.height = 14}
+perSp <-  data.frame(allfreqs) %>%
+  dplyr::filter( markerType %in% 'nuclear', heteroSize > 0) %>%
+  dplyr::group_by(species) %>%
+  dplyr::summarize(totalHeProp = sum(heteroSize) / sum(unbiasSize))
+
+## plot proportion of hetero sites from each locus keeping mtDNA loci
+perLocusHeEstPiSyn <- allfreqs %>% 
+  dplyr::group_by(species, locus) %>%
+  dplyr::summarize(locusHeProp = heteroSize / unbiasSize) %>% 
+  filter(locusHeProp > 0) %>% 
+  left_join(perSp, by = 'species') %>% 
+  left_join(dplyr::select(gen.div, species, EstPiSyn), by = 'species') %>% 
+  drop_na(EstPiSyn)
+
+cols <- rep("gray80", length(unique(perLocusHeEstPiSyn$locus)))
+cols[which(levels(as.factor(unique(perLocusHeEstPiSyn$locus))) %in% c("COI","CYTB","ND1","ND2"))] <- ("red")
+strip <- strip_themed(background_x = elem_list_rect(fill = cols))
+
+# figUphamLocus <- ggplot(perLocusHeEstPiSyn, aes(x = locusHeProp, y = EstPiSyn)) + 
+#   geom_point() + geom_smooth(method = 'lm') + 
+#   geom_smooth(aes(x = totalHeProp), method = 'lm', color = "darkorange", se = FALSE, 
+#               fullrange = TRUE, linewidth = 0.8, linetype = 'dashed', na.rm = TRUE) +
+#   scale_x_log10(labels = scales::label_scientific(digits = 1, trim = FALSE)) +
+#   scale_y_log10() + 
+#   facet_wrap2(~locus, scales = 'free_x', strip = strip) +
+#   labs(x = "ncDNA proportion of heterozygous sites", y = "mtDNA Pi",
+#        subtitle = "Blue regression line for a given locus proportion of heterozygous sites;\nDash orange regression line using heterozygous sites from all loci but slope is varying due to the different species set available for each locus",
+#        caption = "There are several mtDNA alignments with ambiguous nucleotides (red panels)") +
+#   theme_bw() 
+# 
+# figUphamLocus
+# 
+# ggsave(paste0(fig_path,"other/31genes_mtDNAPi-nucHetPropLocus.pdf"),
+#        figUphamLocus,  width = 12, height = 14)
+```
+
+### Compare with three more nuclear datasets
+
+```{r}
+###https://github.com/vsbuffalo/paradox_variation/blob/master/data/combined_data.tsv
+Buffalo <- read_tsv(paste0(folder_path,'otherData/otherNuclear/buffalo2021/combined_data.tsv'), 
+                    show_col_types = FALSE) %>%
+  mutate(species = str_replace(species, " ", "_"),
+         Buffalo = diversity) %>%
+  select(species, Buffalo) %>%
+  drop_na()
+
+###https://www.science.org/doi/suppl/10.1126/science.abn5856/suppl_file/science.abn5856_table_s1.zip
+Zoonomia23 <- readxl::read_excel(paste0(folder_path,'otherData/otherNuclear/zoonomia/science.abn5856_table_s1.xlsx')) %>% 
+  mutate(species = str_replace(word(species, sep = " ",1,2), " ","_"),
+         Zoonomia23 = as.numeric(heterozygosity))  %>% 
+  select(species, Zoonomia23) %>% 
+  drop_na()
+
+###https://figshare.com/articles/dataset/MacroPopGen_Database_Geo-referenced_population-specific_microsatellite_data_across_the_American_continents/7207514 - https://figshare.com/ndownloader/files/23392853
+MacroPopGen <- readxl::read_excel(paste0(folder_path,'otherData/otherNuclear/MacroPopGen/MacroPopGen_Database_final-v0.2.xlsx'), sheet = 'MacroPopGen_Database')  %>%
+  filter(TaxaClass %in% 'Mammalia', !Ho %in% 'NA') %>% 
+  mutate(species = paste0(Genus, '_', Species)) %>% 
+  select(species, Ho) %>% 
+  group_by(species) %>%
+  dplyr::summarise(MacroPopGen_HoMean = mean(as.numeric(Ho), na.rm = TRUE))  %>% 
+  drop_na()
+
+diver4 <- spRate %>%
+  filter(set %in% 'treeMCC') %>%
+  full_join(select(gen.div, species, EstPiSyn), by = join_by(species)) %>%
+  full_join(perSp, by = join_by(species)) %>%
+  full_join(Buffalo, by = join_by(species)) %>%
+  full_join(Zoonomia23, by = join_by(species)) %>%
+  full_join(MacroPopGen, by = join_by(species))
+
+modSummary <- data.frame()
+```
+
+
+#### Upham et al. 2019 nuclear loci heterozygous sites proportion
+
+```{r}
+dtset <- diver4 %>% 
+  select(species, EstPiSyn, tipRate, totalHeProp) %>% 
+  drop_na()
+
+TreeSubset <- drop.tip(treeMCC, as.character(treeMCC$tip.label[which(!treeMCC$tip.label %in% dtset$species)]))
+
+OLSUpham_mt <- summary(lm(log(EstPiSyn) ~ log(totalHeProp), data = dtset))
+PGLSUpham_mt <- gls(log(EstPiSyn) ~ log(totalHeProp), 
+                    data = dtset,
+                    correlation = corPagel(1, phy = TreeSubset, 
+                                           form =~species), 
+                    method = "REML")
+
+OLSUpham_mtRate <- summary(lm(log(EstPiSyn) ~ log(tipRate), data = dtset))
+PGLSUpham_mtRate <- gls(log(EstPiSyn) ~ log(tipRate), 
+                        data = dtset,
+                        correlation = corPagel(1, phy = TreeSubset, 
+                                               form =~species), 
+                        method = "REML")
+
+OLSUpham_HetRate <- summary(lm(log(totalHeProp) ~ log(tipRate), data = dtset))
+PGLSUpham_HetRate <- gls(log(totalHeProp) ~ log(tipRate), 
+                         data = dtset,
+                         correlation = corPagel(1, phy = TreeSubset, 
+                                                form =~species), 
+                         method = "REML")
+
+modSummary <- bind_rows(modSummary, 
+                        data.frame(model = c('Upham_mtNu','Upham_mtRate','Upham_nuRate'),
+                                   N = nrow(dtset),
+                                   OLS_estimate = c(round(OLSUpham_mt$coefficients[2,1],3),
+                                                    round(OLSUpham_mtRate$coefficients[2,1],3),
+                                                    round(OLSUpham_HetRate$coefficients[2,1],3)),
+                                   OLS_pvalue = c(round(OLSUpham_mt$coefficients[2,4],4),
+                                                  round(OLSUpham_mtRate$coefficients[2,4],4),
+                                                  round(OLSUpham_HetRate$coefficients[2,4],4)),
+                                   PGLS_estimate = c(round(coef(summary(PGLSUpham_mt))[2,1],3),
+                                                     round(coef(summary(PGLSUpham_mtRate))[2,1],3),
+                                                     round(coef(summary(PGLSUpham_HetRate))[2,1],3)),
+                                   PGLS_pvalue = c(round(coef(summary(PGLSUpham_mt))[2,4],4),
+                                                   round(coef(summary(PGLSUpham_mtRate))[2,4],4),
+                                                   round(coef(summary(PGLSUpham_HetRate))[2,4],4))))
+```
+
+
+#### Buffalo 2021 whole genome pairwise diversities
+
+```{r}
+dtset <- diver4 %>% 
+  select(species, EstPiSyn, tipRate, Buffalo) %>% 
+  drop_na()
+
+TreeSubset <- drop.tip(treeMCC, as.character(treeMCC$tip.label[which(!treeMCC$tip.label %in% dtset$species)]))
+
+OLSBuffalo_mt <- summary(lm(log(EstPiSyn) ~ log(Buffalo), data = dtset))
+PGLSBuffalo_mt <- gls(log(EstPiSyn) ~ log(Buffalo), 
+                      data = dtset,
+                      correlation = corPagel(1, phy = TreeSubset, 
+                                             form =~species), 
+                      method = "REML")
+
+OLSBuffalo_mtRate <- summary(lm(log(EstPiSyn) ~ log(tipRate), data = dtset))
+PGLSBuffalo_mtRate <- gls(log(EstPiSyn) ~ log(tipRate), 
+                          data = dtset,
+                          correlation = corPagel(1, phy = TreeSubset, 
+                                                 form =~species), 
+                          method = "REML")
+
+OLSBuffalo_HetRate <- summary(lm(log(Buffalo) ~ log(tipRate), data = dtset))
+PGLSBuffalo_HetRate <- gls(log(Buffalo) ~ log(tipRate), 
+                           data = dtset,
+                           correlation = corPagel(1, phy = TreeSubset, 
+                                                  form =~species), 
+                           method = "REML")
+
+modSummary <- bind_rows(modSummary, 
+                        data.frame(model = c('Buffalo_mtNu','Buffalo_mtRate','Buffalo_nuRate'),
+                                   N = nrow(dtset),
+                                   OLS_estimate = c(round(OLSBuffalo_mt$coefficients[2,1],3),
+                                                    round(OLSBuffalo_mtRate$coefficients[2,1],3),
+                                                    round(OLSBuffalo_HetRate$coefficients[2,1],3)),
+                                   OLS_pvalue = c(round(OLSBuffalo_mt$coefficients[2,4],4),
+                                                  round(OLSBuffalo_mtRate$coefficients[2,4],4),
+                                                  round(OLSBuffalo_HetRate$coefficients[2,4],4)),
+                                   PGLS_estimate = c(round(coef(summary(PGLSBuffalo_mt))[2,1],3),
+                                                     round(coef(summary(PGLSBuffalo_mtRate))[2,1],3),
+                                                     round(coef(summary(PGLSBuffalo_HetRate))[2,1],3)),
+                                   PGLS_pvalue = c(round(coef(summary(PGLSBuffalo_mt))[2,4],4),
+                                                   round(coef(summary(PGLSBuffalo_mtRate))[2,4],4),
+                                                   round(coef(summary(PGLSBuffalo_HetRate))[2,4],4))))
+```
+
+
+#### Zoonomia (Wilder et al. 2023) whole genome heterozygosity
+
+```{r}
+dtset <- diver4 %>% 
+  select(species, EstPiSyn, tipRate, Zoonomia23) %>% 
+  drop_na()
+
+TreeSubset <- drop.tip(treeMCC, as.character(treeMCC$tip.label[which(!treeMCC$tip.label %in% dtset$species)]))
+
+OLSZoonomia23_mt <- summary(lm(log(EstPiSyn) ~ log(Zoonomia23), data = dtset))
+PGLSZoonomia23_mt <- gls(log(EstPiSyn) ~ log(Zoonomia23), 
+                         data = dtset,
+                         correlation = corPagel(1, phy = TreeSubset, 
+                                                form =~species), 
+                         method = "REML")
+
+OLSZoonomia23_mtRate <- summary(lm(log(EstPiSyn) ~ log(tipRate), data = dtset))
+PGLSZoonomia23_mtRate <- gls(log(EstPiSyn) ~ log(tipRate), 
+                             data = dtset,
+                             correlation = corPagel(1, phy = TreeSubset, 
+                                                    form =~species), 
+                             method = "REML")
+
+OLSZoonomia23_HetRate <- summary(lm(log(Zoonomia23) ~ log(tipRate), data = dtset))
+PGLSZoonomia23_HetRate <- gls(log(Zoonomia23) ~ log(tipRate), 
+                              data = dtset,
+                              correlation = corPagel(1, phy = TreeSubset, 
+                                                     form =~species), 
+                              method = "REML")
+
+modSummary <- bind_rows(modSummary, 
+                        data.frame(model = c('Zoonomia23_mtNu','Zoonomia23_mtRate','Zoonomia23_nuRate'),
+                                   N = nrow(dtset),
+                                   OLS_estimate = c(round(OLSZoonomia23_mt$coefficients[2,1],3),
+                                                    round(OLSZoonomia23_mtRate$coefficients[2,1],3),
+                                                    round(OLSZoonomia23_HetRate$coefficients[2,1],3)),
+                                   OLS_pvalue = c(round(OLSZoonomia23_mt$coefficients[2,4],4),
+                                                  round(OLSZoonomia23_mtRate$coefficients[2,4],4),
+                                                  round(OLSZoonomia23_HetRate$coefficients[2,4],4)),
+                                   PGLS_estimate = c(round(coef(summary(PGLSZoonomia23_mt))[2,1],3),
+                                                     round(coef(summary(PGLSZoonomia23_mtRate))[2,1],3),
+                                                     round(coef(summary(PGLSZoonomia23_HetRate))[2,1],3)),
+                                   PGLS_pvalue = c(round(coef(summary(PGLSZoonomia23_mt))[2,4],4),
+                                                   round(coef(summary(PGLSZoonomia23_mtRate))[2,4],4),
+                                                   round(coef(summary(PGLSZoonomia23_HetRate))[2,4],4))))
+```
+
+#### MacroPopGen observed heterozygosity
+
+```{r}
+dtset <- diver4 %>% 
+  select(species, EstPiSyn, tipRate, MacroPopGen_HoMean) %>% 
+  drop_na()
+
+TreeSubset <- drop.tip(treeMCC, as.character(treeMCC$tip.label[which(!treeMCC$tip.label %in% dtset$species)]))
+
+OLSMacroPopGen_mt <- summary(lm(log(EstPiSyn) ~ log(MacroPopGen_HoMean), data = dtset))
+PGLSMacroPopGen_mt <- gls(log(EstPiSyn) ~ log(MacroPopGen_HoMean), 
+                          data = dtset,
+                          correlation = corPagel(1, phy = TreeSubset, 
+                                                 form =~species), 
+                          method = "REML")
+
+OLSMacroPopGen_mtRate <- summary(lm(log(EstPiSyn) ~ log(tipRate), data = dtset))
+PGLSMacroPopGen_mtRate <- gls(log(EstPiSyn) ~ log(tipRate), 
+                              data = dtset,
+                              correlation = corPagel(1, phy = TreeSubset, 
+                                                     form =~species), 
+                              method = "REML")
+
+OLSMacroPopGen_HetRate <- summary(lm(log(MacroPopGen_HoMean) ~ log(tipRate), data = dtset))
+PGLSMacroPopGen_HetRate <- gls(log(MacroPopGen_HoMean) ~ log(tipRate), 
+                               data = dtset,
+                               correlation = corPagel(1, phy = TreeSubset, 
+                                                      form =~species), 
+                               method = "REML")
+
+modSummary <- bind_rows(modSummary, 
+                        data.frame(model = c('MacroPopGen_mtNu','MacroPopGen_mtRate','MacroPopGen_nuRate'),
+                                   N = nrow(dtset),
+                                   OLS_estimate = c(round(OLSMacroPopGen_mt$coefficients[2,1],3),
+                                                    round(OLSMacroPopGen_mtRate$coefficients[2,1],3),
+                                                    round(OLSMacroPopGen_HetRate$coefficients[2,1],3)),
+                                   OLS_pvalue = c(round(OLSMacroPopGen_mt$coefficients[2,4],4),
+                                                  round(OLSMacroPopGen_mtRate$coefficients[2,4],4),
+                                                  round(OLSMacroPopGen_HetRate$coefficients[2,4],4)),
+                                   PGLS_estimate = c(round(coef(summary(PGLSMacroPopGen_mt))[2,1],3),
+                                                     round(coef(summary(PGLSMacroPopGen_mtRate))[2,1],3),
+                                                     round(coef(summary(PGLSMacroPopGen_HetRate))[2,1],3)),
+                                   PGLS_pvalue = c(round(coef(summary(PGLSMacroPopGen_mt))[2,4],4),
+                                                   round(coef(summary(PGLSMacroPopGen_mtRate))[2,4],4),
+                                                   round(coef(summary(PGLSMacroPopGen_HetRate))[2,4],4))))
+
+# write.table(modSummary, paste0(folder_path,"7.pgls/outputs/mtDNA_nuclear_PGLS.txt"), 
+#             quote = FALSE, row.names = FALSE, col.names = TRUE, sep = '\t')
+```
+
+****
+
+#### Upham vs 3 nuclear datasets
+
+```{r}
+### correlation between Upham et al and each of the other 3 nuclear datasets
+dtset1 <- diver4 %>% 
+  select(species, totalHeProp, Buffalo) %>% 
+  drop_na()
+
+TreeSubset <- drop.tip(treeMCC, as.character(treeMCC$tip.label[which(!treeMCC$tip.label %in% dtset1$species)]))
+
+PGLSUBuffalo <- gls(log(totalHeProp) ~ log(Buffalo), 
+                    data = dtset1,
+                    correlation = corPagel(1, phy = TreeSubset, 
+                                           form =~species), 
+                    method = "REML")
+
+dtset2 <- diver4 %>% 
+  select(species, totalHeProp, Zoonomia23) %>% 
+  drop_na()
+
+TreeSubset <- drop.tip(treeMCC, as.character(treeMCC$tip.label[which(!treeMCC$tip.label %in% dtset2$species)]))
+
+PGLSUZoonomia23 <- gls(log(totalHeProp) ~ log(Zoonomia23), 
+                       data = dtset2,
+                       correlation = corPagel(1, phy = TreeSubset, 
+                                              form =~species), 
+                       method = "REML")
+
+dtset3 <- diver4 %>% 
+  select(species, totalHeProp, MacroPopGen_HoMean) %>% 
+  drop_na()
+
+TreeSubset <- drop.tip(treeMCC, as.character(treeMCC$tip.label[which(!treeMCC$tip.label %in% dtset3$species)]))
+
+PGLSUMacroPopGen <- gls(log(totalHeProp) ~ log(MacroPopGen_HoMean), 
+                        data = dtset3,
+                        correlation = corPagel(1, phy = TreeSubset, 
+                                               form =~species), 
+                        method = "REML")
+
+modSummaryNuc <- data.frame(model = c('Upham_Buffalo','Upham_Zoonomia','Upham_MacroPopGen'),
+                            N = c(nrow(dtset1),nrow(dtset2),nrow(dtset3)),
+                            PGLS_estimate = c(round(coef(summary(PGLSUBuffalo))[2,1],3),
+                                              round(coef(summary(PGLSUZoonomia23))[2,1],3),
+                                              round(coef(summary(PGLSUMacroPopGen))[2,1],3)),
+                            PGLS_pvalue = c(round(coef(summary(PGLSUBuffalo))[2,4],4),
+                                            round(coef(summary(PGLSUZoonomia23))[2,4],4),
+                                            round(coef(summary(PGLSUMacroPopGen))[2,4],4)))
+
+# write.table(modSummaryNuc, paste0(folder_path,"7.pgls/extra/Upham_3nuclear_PGLS.txt"), 
+#             quote = FALSE, row.names = FALSE, col.names = TRUE, sep = '\t')
+
+##### mtDNA_nuDNA_PGLSsummary.xlsx contains the data in Upham_3nuclear_PGLS.txt with the data and models describe more explicitly
+```
+****
+
+#### Figure
+
+```{r, fig.width=14, fig.height=8}
+figdiv12a <- diver4 %>%
+  pivot_longer(cols = totalHeProp:MacroPopGen_HoMean) %>%
+  mutate(name = fct_inorder(name)) %>% 
+  ggplot(aes(x = value, y = EstPiSyn)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  facet_wrap(~name, ncol = 4, scale = 'free',
+             labeller = labeller(name = c(
+               totalHeProp ='Upham Het. prop.',
+               Buffalo = 'Buffalo pairwise diversity',
+               Zoonomia23 = 'Zoonomia (Wilder 2023) heterozygosity',
+               MacroPopGen_HoMean = 'MacroPopGen microsatellites Ho'))) +
+  labs(x = "nuDNA genetic diversity", y = "mtDNA genetic diversity (this study)") +
+  scale_x_log10(labels = label_number(accuracy = 0.0001), 
+                breaks = scales::breaks_log(n = 4)) + 
+  scale_y_log10(n.breaks = 5, 
+                labels = label_number(accuracy = 0.0001))  + 
+  theme_bw(base_family = "Arial") + 
+  theme(text = element_text(size = 11), 
+        strip.background = element_rect(fill = NA), 
+        strip.text = element_text(size = 11))
+
+figdiv12b <- diver4 %>%
+  pivot_longer(cols = totalHeProp:MacroPopGen_HoMean) %>%
+  drop_na(EstPiSyn, value) %>% 
+  pivot_longer(cols = c(EstPiSyn, value), names_to = 'marker') %>% 
+  mutate(name = factor(name, levels = c("totalHeProp", "Buffalo",
+                                        "Zoonomia23","MacroPopGen_HoMean"))) %>% 
+  ggplot(aes(y = value, x = tipRate, color = marker)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  facet_wrap(~name, ncol = 4, scale = 'free',
+             labeller = labeller(name = c(
+               totalHeProp ='Upham Het. prop.',
+               Buffalo = 'Buffalo pairwise diversity',
+               Zoonomia23 = 'Zoonomia (Wilder 2023) heterozygosity',
+               MacroPopGen_HoMean = 'MacroPopGen microsatellites Ho'))) +
+  labs(y = "Genetic diversity", 
+       x = bquote("MCC tree speciation rates " ~ (Myr^-1))) +
+  scale_x_log10() + 
+  scale_y_log10(labels = label_number(accuracy = 0.0001)) +
+  scale_color_manual(name = 'DNA source',
+                     values = hues::iwanthue(2),
+                     breaks = c('EstPiSyn', 'value'),
+                     labels = c("mtDNA\n(this study)",
+                                'nuDNA'))  + 
+  theme_bw(base_family = "Arial") + 
+  theme(text = element_text(size = 11), 
+        strip.background = element_rect(fill = NA), 
+        strip.text = element_text(size = 11),
+        legend.position = 'bottom')
+
+figdiv12 <- (figdiv12a / figdiv12b) + 
+  plot_annotation(tag_levels = 'A')
+
+# showtext::showtext_auto(FALSE)
+# ggsave(paste0(fig_path, 'FigS12.pdf'), figdiv12, width = 14, height = 8, device = cairo_pdf)
+# ggsave(paste0(fig_path, 'FigS12.png'), figdiv12, width = 14, height = 8, device = png, type = 'cairo-png')
+# showtext::showtext_auto(TRUE)
+
+figdiv12
+```
+
+<div class = "figure">
+**Supplementary Figure 12:** Comparison between mitochondrial (cyt *b*) genetic diversity and nuclear genetic diversity estimated from four datasets. (A) Relationship between the two types of DNA markers. (B) Relationships between genetic diversity estimates and speciation rate estimates from the MCC tree for nuclear markers (in purple) and cyt *b* (in green), when restricting the species set to those represented in the nuclear database. X and Y-axis scales are logged and PGLS estimates and p-values are shown.
+</div>
+
+****
+
+# Supplementary models
+
+## R2 of MCC tree
+
+```{r}
+filter(dtR2, set %in% 'treeMCC') %>% 
+  pivot_wider(names_from = name, values_from = value)
+```
+
+
+****
+
+## Litter size extra models
+
+```{r, fig.width=9, fig.height=6}
+Myhrvold2015Matched <- traitData %>% ### had to go back to matchTraitData to be able to use litters_or_clutches_per_y with the same matched species
+  mutate(
+         annualFecundity = litter_or_clutch_size_n * litters_or_clutches_per_y) %>% 
+  right_join(select(gen.div, species, EstPiSyn)) %>% 
+  select(species, EstPiSyn, litters_or_clutches_per_y, litter_or_clutch_size_n, annualFecundity) 
+
+### dataset complete for just litter size - 1427 sp
+litterSizeDataset <-  Myhrvold2015Matched %>% 
+  select(species, EstPiSyn, 
+         litter_or_clutch_size_n) %>%
+  drop_na() 
+
+ols1 <- summary(lm(log(EstPiSyn) ~ log(litter_or_clutch_size_n),data = litterSizeDataset))
+# TreeSubset <- drop.tip(treeMCC, as.character(treeMCC$tip.label[which(!treeMCC$tip.label %in% litterSizeDataset$species)]))
+# modlitterSize <- gls(log(EstPiSyn) ~ log(litter_or_clutch_size_n),
+#                  data = litterSizeDataset,
+#                  correlation = corPagel(1, phy = TreeSubset,
+#                                         form =~species),
+#                  method = "ML")
+# 
+# saveRDS(modlitterSize, paste0(folder_path,'7.pgls/extra/modlitter1427.rds'))
+modlitterSize <- readRDS(paste0(folder_path,'7.pgls/extra/modlitter1427.rds'))
+#coef(summary(modlitterSize)) # not significant
+
+
+ols1.2 <- summary(lm(log(EstPiSyn) ~ log(litter_or_clutch_size_n), data = drop_na(Myhrvold2015Matched))) ## dataset with the same species as available for annual fecundity
+# TreeSubset <- drop.tip(treeMCC, as.character(treeMCC$tip.label[which(!treeMCC$tip.label %in% drop_na(Myhrvold2015Matched)$species)]))
+# modlitterSize2 <- gls(log(EstPiSyn) ~ log(litter_or_clutch_size_n),
+#                  data = drop_na(Myhrvold2015Matched),
+#                  correlation = corPagel(1, phy = TreeSubset,
+#                                         form =~species),
+#                  method = "ML")
+# 
+# saveRDS(modlitterSize2, paste0(folder_path,'7.pgls/extra/modlitter1017.rds'))
+modlitterSize2 <- readRDS(paste0(folder_path,'7.pgls/extra/modlitter1017.rds'))
+#coef(summary(modlitterSize2)) # not significant
+
+
+### dataset complete for just annual fecundity - 1017 sp
+annualFecDataset <-  Myhrvold2015Matched %>% 
+  select(species, EstPiSyn,
+         annualFecundity) %>%
+  drop_na() 
+
+ols2 <- summary(lm(log(EstPiSyn) ~ log(annualFecundity),data = annualFecDataset))
+# TreeSubset <- drop.tip(treeMCC, as.character(treeMCC$tip.label[which(!treeMCC$tip.label %in% annualFecDataset$species)]))
+# modannualFec <- gls(log(EstPiSyn) ~ log(annualFecundity),
+#                  data = annualFecDataset,
+#                  correlation = corPagel(1, phy = TreeSubset,
+#                                         form =~species),
+#                  method = "ML")
+# 
+# saveRDS(modannualFec, paste0(folder_path,'7.pgls/extra/modannualFec1017.rds'))
+modannualFec <- readRDS(paste0(folder_path,'7.pgls/extra/modannualFec1017.rds'))
+#coef(summary(modannualFec)) ## p-value < 0.05 positive slope, as expected
+
+### dataset used in trait analysis - 1131 sp (rerun PGLS since pgls in fig. S8 were run with the sp dataset when still was using geoArea variable)
+usedTraitDataset <-  gendivSpRateTrait %>% 
+  filter(set %in% 'treeMCC') %>% 
+  select(species, clades, EstPiSyn, tipRate, BodyMassKg_notInputed, 
+         mean_temp, latitude_mean,
+         litter_or_clutch_size_n, GenerationLength_d) %>%
+  drop_na()
+
+ols3 <- summary(lm(log(EstPiSyn) ~ log(litter_or_clutch_size_n),data = usedTraitDataset))
+# TreeSubset <- drop.tip(treeMCC, as.character(treeMCC$tip.label[which(!treeMCC$tip.label %in% usedTraitDataset$species)]))
+# modlitterUsed <- gls(log(EstPiSyn) ~ log(litter_or_clutch_size_n),
+#                  data = usedTraitDataset,
+#                  correlation = corPagel(1, phy = TreeSubset,
+#                                         form =~species),
+#                  method = "ML")
+# 
+# saveRDS(modlitterUsed, paste0(folder_path,'7.pgls/extra/modlitter1131.rds'))
+modlitterUsed <- readRDS(paste0(folder_path,'7.pgls/extra/modlitter1131.rds'))
+#coef(summary(modlitterUsed)) ## p-value < 0.05 negative slope
+
+modelSum <- tibble(
+    "Term (logged)" = c("Litter size used in analyses with traits (1131 sp)",
+              "Complete litter size data (1427 sp)",
+              "Litter size data similar to annual fecundity (1017 sp)",
+              "Annual fecundity (1017 sp)"),
+    `OLS slope estimate` = c(ols3$coefficients[2,1],
+                             ols1$coefficients[2,1],
+                             ols1.2$coefficients[2,1],
+                             ols2$coefficients[2,1]),
+    `OLS p-value` = c(ols3$coefficients[2,4],
+                      ols1$coefficients[2,4],
+                      ols1.2$coefficients[2,4],
+                      ols2$coefficients[2,4]),
+    `PGLS slope estimate` = c(coef(summary(modlitterUsed))[2,1],
+                              coef(summary(modlitterSize))[2,1],
+                              coef(summary(modlitterSize2))[2,1],
+                              coef(summary(modannualFec))[2,1]),
+    `PGLS p-value` = c(coef(summary(modlitterUsed))[2,4],
+                       coef(summary(modlitterSize))[2,4],
+                       coef(summary(modlitterSize2))[2,4],
+                       coef(summary(modannualFec))[2,4])) %>%
+    mutate(across(contains("p-value"), 
+                  ~ifelse(. < 0.001, 
+                          "<0.001", round(.,3)))) %>%
+    mutate(across(contains("estimate"), 
+                  ~round(., 4)))  
+
+####
+# comp3 <- Myhrvold2015Matched  %>% 
+#   left_join(select(usedTraitDataset, species, usedLitterSize = litter_or_clutch_size_n)) %>% 
+#   pivot_longer(cols = litter_or_clutch_size_n:usedLitterSize) 
+# 
+# species_counts <- comp3 %>%
+#     group_by(name) %>%
+#     tally(!is.na(value)) %>% 
+#   pivot_wider(names_from = name, values_from = n)
+# 
+# qc3 <- comp3 %>% 
+#   ggplot(aes(y = EstPiSyn, x = value, color = fct_rev(name))) +
+#   geom_point(shape = 16, 
+#              alpha = 0.5, size = 0.7) +
+#   geom_smooth(method = 'lm', se = FALSE) +
+#   scale_y_continuous(trans='log10',expand=c(0,0.02)) +
+#   scale_x_continuous(trans='log10',expand=c(0,0.01))  +
+#   labs(y = expression(paste(theta['Tsyn'])), 
+#        x = paste0('Fecundity proxies')) + 
+#     scale_colour_manual(name=NULL,
+#                      values = iwanthue(3),
+#                      labels = rev(c(
+#                        sprintf('Annual fecundity\n(litter size x litters per year) (n=%d)', 
+#                               species_counts$annualFecundity),
+#                        sprintf('Complete litter size data (n=%d)', 
+#                               species_counts$litter_or_clutch_size_n),
+#                        sprintf('Litter size used in analyses\nwith traits (n=%d)', 
+#                               species_counts$usedLitterSize)
+#                      ))) +   
+#   theme_bw() + 
+#   theme(#legend.position = "bottom",
+#           legend.justification = "top", 
+#           text = element_text(size = 12))
+
+
+
+# Convert the flextable to a ggplot object
+ft <- autofit(flextable(modelSum)) %>%
+  add_header_row(
+   values = as_paragraph("OLS/PGLS model: ","\U03B8", as_sub("Tsyn"), " ~ ",
+                                "Fecundity proxy"),
+  colwidths = 5) %>%
+  align(align = "center", part = "all") %>%  # This makes all columns left-aligned
+  flextable::font(part = "all", fontname = "arial") %>% 
+  flextable::fontsize(size = 11, part = "all")
+
+ft_grob <- gen_grob(ft, fit = "width")
+ft_grob_with_margin <- grid::grobTree(ft_grob, 
+                                      vp = grid::viewport(width = 0.9, 
+                                                          height = 0.9, y = 0.38))
+
+wrap_plots(ft_grob_with_margin)
+# qc3t <- wrap_plots(qc3, ft_grob_with_margin) +
+#   plot_layout(heights = c(1, 0.5)) 
+
+# showtext::showtext_auto(FALSE)
+# ggsave(paste0(fig_path, 'FigS13.pdf'), qc3t, width = 9, height = 6, device = cairo_pdf)
+# ggsave(paste0(fig_path, 'FigS13.png'), qc3t, width = 9, height = 6, device = png, type = 'cairo-png')
+# showtext::showtext_auto(TRUE)
+
+# qc3t
+```
+
+****
+
+## Pillai's test to compare synonymous with nonsynonymous gentic diversity results
+
+```{r}
+filter(PGLSglobalAll, set %in% 'treeMCC', analysis %in% 'EstPiSyn')
+filter(PGLSglobalAll, set %in% 'treeMCC', analysis %in% 'EstPiNonSyn')
+```
+
+```{r}
+###First fit a linear model using Generalized Least Squares to multivariate data set with penalized log-likelihood method and then perform a multivariate analysis of variance using the Pillai test (MANOVA).
+##install_github("JClavel/mvMORPH", ref="devel_1.1.5") 
+library(mvMORPH)
+
+GendivSpRateNonSyn <- gendivSpRateMutRate  %>% 
+  left_join(select(gen.div,species,EstPiNonSyn)) %>% 
+  filter(set %in% 'treeMCC', EstPiNonSyn > 0)
+
+dtset <- cbind(GendivSpRateNonSyn$EstPiSyn, GendivSpRateNonSyn$EstPiNonSyn)
+rownames(dtset) <- GendivSpRateNonSyn$species
+TreeSubset <- drop.tip(treeMCC, as.character(treeMCC$tip.label[which(!treeMCC$tip.label %in% GendivSpRateNonSyn$species)]))
+
+dtset <- list(genDiv = log(dtset), 
+              spRate = log(GendivSpRateNonSyn$tipRate))
+
+fit_mult <- mvgls(genDiv ~ spRate,
+                  data = dtset,
+                  tree = TreeSubset,
+                  model = "lambda",
+                  method="LL")    
+
+manova.gls(fit_mult, nperm = 999)
+```
+
+****
+
+## ClaDS vs DR
+
+```{r, fig.height=5, fig.width=7, eval = FALSE}
+DR <- read.delim(paste0(folder_path,'/otherData/upham2019/DR-SUMMARY_MamPhy_BDvr_Completed_5911sp_topoCons_NDexp_all10k_v2_expanded.txt'), header = T, sep = " ") %>%
+  rownames_to_column(var = 'species') %>%
+  mutate(species = word(species, 1,2, sep = "_")) %>%
+  select(species, means) %>%
+  rename(DRrate_mean = means)
+
+gendivSpRate3 <- gendivSpRate %>%
+  left_join(., DR, by = 'species') %>%
+  filter(set %in% 'treeMCC') %>%
+  select(species, EstPiSyn, DRrate_mean, tipRate) %>%
+  drop_na()
+
+summary(lm(log(tipRate) ~ log(DRrate_mean), data = gendivSpRate3))
+```
+
+****
+
+# Export used data
+
+```{r class.source = 'fold-show'}
+filter(gendivSpRateMutRate, set %in% 'treeMCC') %>% 
+  select(species,clades,tipRate,EstPiSyn, EstThetaSyn) %>% 
+  write_csv('figures_tables/Data/SourceDataFile_fig1.csv')
+
+pglsResult %>% 
+  write_csv('figures_tables/Data/SourceDataFile_fig2-3.csv')
+
+BMLMglobalPi %>% 
+  write_delim('figures_tables/Data/SourceDataFile_fig3.txt', delim = "\t", quote = "none")
+
+mgendivSpRateMutRate %>% 
+  write_csv('figures_tables/Data/SourceDataFile_fig2-4-S11.csv')
+
+filter(BMLMglobal_mutRateExt, !set %in% 'treeMCC', 
+             analysis %in% c('paste(mu, " ~ ", lambda)',
+                             'paste(N["e"], " ~ ", lambda)')) %>% 
+   write_delim('figures_tables/Data/SourceDataFile_fig4.txt', delim = "\t", quote = "none")
+
+sumBMLM %>% 
+  write_csv('figures_tables/Data/SourceDataFile_fig4bmlm.csv')
+
+pglsResultMR %>% 
+  write_csv('figures_tables/Data/SourceDataFile_fig4pgls.csv')
+
+gen.div0 %>% 
+  write_csv('figures_tables/Data/SourceDataFile_figS1.csv')
+  
+mGendivSpRate %>%
+  filter(!clades %in% 'Other') %>%
+  select(species, rate_mean, EstPiSyn, EstThetaSyn, clades) %>%
+  pivot_longer(cols = c(EstPiSyn:EstThetaSyn)) %>% 
+  write_csv('figures_tables/Data/SourceDataFile_figS2.csv') 
+
+filter(meanTipRateClade, clades %in%
+                                tcol0$clades[-15]) %>% 
+  write_csv('figures_tables/Data/SourceDataFile_figS3.csv')
+
+dtR2 %>% 
+  write_csv('figures_tables/Data/SourceDataFile_figS4.csv')
+
+pgls2 %>% 
+  write_csv('figures_tables/Data/SourceDataFile_figS5pgls.csv')
+
+BMLMglobalsum2 %>% 
+    write_csv('figures_tables/Data/SourceDataFile_figS5bmlm.csv')
+
+NspeciesSF %>% 
+    write_csv('figures_tables/Data/SourceDataFile_figS6clades.csv')
+
+pglsSum %>% 
+  write_csv('figures_tables/Data/SourceDataFile_figS6global.csv')
+
+dtSet %>% 
+  write_csv('figures_tables/Data/SourceDataFile_figS7.csv')
+
+pglsResulttraits %>% 
+   write_csv('figures_tables/Data/SourceDataFile_figS8-9pgls.csv')
+
+BMLMglobal_traitsExtPos %>% 
+   write_delim('figures_tables/Data/SourceDataFile_figS8-9bmlm.txt', delim = "\t", quote = "none")
+
+gendivSpRateSynNon %>% 
+  write_csv('figures_tables/Data/SourceDataFile_figS10A-B.csv')
+
+PGLSSynNon %>% 
+  write_csv('figures_tables/Data/SourceDataFile_figS10C.csv')
+
+diver4 %>% 
+  select(-branchRate, -set, -ord, -fam) %>% 
+  write_csv('figures_tables/Data/SourceDataFile_figS12.csv')
+```
+
+
+****
+
+# Version
+
+```{r}
+sessionInfo()
+save.image(paste0(folder_path,'Figures_v3_workingEnvironment.RData'))
+```
+
+
+

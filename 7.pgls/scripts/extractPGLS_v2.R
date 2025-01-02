@@ -49,7 +49,7 @@ pglsListR2 <- list()
 for(i in pglsGlobal){
   pgls <- readRDS(i)
   tree = str_replace(word(i,-1, sep = "_"),".rds","")
-  r2 <- R2(mod = pgls[['EstPiSyn']], pred = FALSE) ## pred takes a lot of time and I don't think it makes sense with something that is so badly predicted by the model, the focus is more in just showing the range of correlation across posterior trees, we already know the correlation strength is really weak.
+  r2 <- R2(mod = pgls[['EstPiSyn']], pred = FALSE) ## pred takes a lot of time
   pglsListR2[[tree]] <- list(pgls[['EstPiSyn']], r2)
 }  
 saveRDS(pglsListR2, paste0(folder_path, 'pgls/gendivSpRate_PGLS_R2EstPiSyn.rds'))
@@ -82,35 +82,5 @@ for(i in pglsClade){
   print(i)
 }
 saveRDS(pglssum100, paste0(folder_path, 'pgls/clade/clade_gendivSpRate_PGLSresults.rds'))
-
-##### temp
-
-
-pglsGlobal <- list.files(paste0(folder_path, 'pgls/output_synNonMut/'), full.names = T, pattern = "global")
-
-pglssum100 <- data.frame()
-for(i in pglsGlobal){
-  
-  pgls <- readRDS(i)
-  pglssum <- data.frame()                      
-  for (j in names(pgls)){
-    if(!is.null(pgls[[j]])){
-      pglssum <- bind_rows(pglssum, 
-                           data.frame(set = str_replace(word(i,-1, sep = "_"),".rds",""),
-                                      analysis = j,
-                                      df = pgls[[j]]$dims$N,
-                                      #term = rownames(coef(summary(pgls[[j]]))),
-                                      Estimate = t(coef(summary(pgls[[j]]))[2,1]),
-                                      pvalue = t(coef(summary(pgls[[j]]))[2,4]),
-                                      lambda = attributes(pgls[[j]]$apVar)$Pars['corStruct'], ####
-                                      stringsAsFactors = FALSE))
-    }
-  }           
-  pglssum100 <- rbind(pglssum100,pglssum)
-}
-
-
-saveRDS(pglssum100, paste0(folder_path, 'pgls/synNonMut_PGLSall.rds'))
-
 
 
