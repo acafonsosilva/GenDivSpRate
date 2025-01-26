@@ -4,7 +4,7 @@ This is a little overview of the scripts needed to run the analyses of the manus
 
 ### Figures_v3.Rmd
 
-Rmarkdown file with code used to make all the figures, including some extra models mentioned in the manuscript. It also includes the code used to export the Source Data files used for each figure, versions of the used packages and exports the R working environment. Output as HTML file Figures_v3.html that can be open in a browser.
+Rmarkdown file with code used to make all the figures, including some extra models mentioned in the manuscript. It also includes the code used to export the Source Data files used for each figure, versions of the used packages and exports the R working environment. Output as HTML file Figures_v3.html that can be open in a browser or at https://acafonsosilva.github.io/GenDivSpRate/.
 
 ## Description of the scripts used in the analyses
 
